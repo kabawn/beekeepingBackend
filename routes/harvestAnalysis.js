@@ -26,8 +26,6 @@ router.get("/by-hive", async (req, res) => {
 });
 
 // GET harvest analysis by apiary
-// Example in harvestAnalysis.js
-// GET harvest analysis by hive (including apiary name)
 router.get("/by-hive", async (req, res) => {
    try {
       const query = `
@@ -39,14 +37,14 @@ router.get("/by-hive", async (req, res) => {
       FROM harvests AS har
       JOIN supers AS s ON har.super_id = s.id
       JOIN hives AS h ON s.hive_id = h.id
-      JOIN apiaries AS a ON h.apiary_id = a.id  -- Join with apiary table
+      JOIN apiaries AS a ON h.apiary_id = a.id  -- Join with apiaries table
       GROUP BY h.id, h.hive_identifier, a.name
       ORDER BY total_honey DESC;
     `;
 
       const result = await pool.query(query);
 
-      console.log("Fetched Hive Data:", result.rows); // Log the fetched data
+      console.log("Fetched Hive Data with Apiary:", result.rows); // Debugging log
       res.json(result.rows);
    } catch (error) {
       console.error("Error in harvest analysis by hive:", error);
