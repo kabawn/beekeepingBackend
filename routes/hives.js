@@ -12,13 +12,13 @@ const pool = require('../db'); // Ensure you have a db.js file that exports your
  * - current_queen_id (number, optional)
  */
 router.post('/', async (req, res) => {
-  const { apiary_id, hive_identifier, hive_type_id, current_queen_id } = req.body;
+  const { apiary_id, hive_identifier, hive_type_id, current_queen_id, total_frames } = req.body;
   try {
     const result = await pool.query(
-      `INSERT INTO hives (apiary_id, hive_identifier, hive_type_id, current_queen_id)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO hives (apiary_id, hive_identifier, hive_type_id, current_queen_id, total_frames)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [apiary_id, hive_identifier, hive_type_id, current_queen_id]
+      [apiary_id, hive_identifier, hive_type_id, current_queen_id, total_frames]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -26,6 +26,7 @@ router.post('/', async (req, res) => {
     res.status(500).json({ error: 'Server error while creating hive' });
   }
 });
+
 
 /**
  * Retrieve all hives.
@@ -84,24 +85,38 @@ router.get('/identifier/:hive_identifier', async (req, res) => {
  * - current_queen_id (number, optional)
  */
 router.put('/:id', async (req, res) => {
+  console.log("📝 PUT /hives/:id triggered!");
   const { id } = req.params;
-  const { apiary_id, hive_identifier, hive_type_id, current_queen_id } = req.body;
+  console.log("🔍 Hive ID:", id);
+  console.log("📥 Received Data:", req.body);
+
   try {
     const result = await pool.query(
       `UPDATE hives 
-       SET apiary_id = $1, hive_identifier = $2, hive_type_id = $3, current_queen_id = $4 
-       WHERE id = $5 RETURNING *`,
-      [apiary_id, hive_identifier, hive_type_id, current_queen_id, id]
+       SET apiary_id = $1, hive_identifier = $2, hive_type_id = $3, 
+           current_queen_id = $4, total_frames = $5
+       WHERE id = $6 RETURNING *`,
+      [req.body.apiary_id, req.body.hive_identifier, req.body.hive_type_id, req.body.current_queen_id, req.body.total_frames, id]
     );
+
+    console.log("🔄 Update Query Executed.");
+    console.log("🔍 Update Result:", result.rows);
+
     if (result.rows.length === 0) {
+      console.error("⚠️ Hive Not Found");
       return res.status(404).json({ error: 'Hive not found' });
     }
+
+    console.log("✅ Hive Updated Successfully:", result.rows[0]);
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error updating hive:', error);
-    res.status(500).json({ error: 'Server error while updating hive' });
+    console.error("❌ Error updating hive:", error);
+    res.status(500).json({ error: "Server error while updating hive" });
   }
 });
+
+
+
 
 /**
  * Delete a hive by ID.
