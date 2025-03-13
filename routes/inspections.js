@@ -95,16 +95,26 @@ router.get("/", async (req, res) => {
   }
 
   try {
+    // ✅ Fetch inspections with total_frames from the hives table
     const result = await pool.query(
-      "SELECT * FROM inspections WHERE hive_id = $1 ORDER BY inspection_date DESC",
+      `SELECT 
+          inspections.*, 
+          hives.total_frames, 
+          (hives.total_frames - inspections.current_frames) AS missing_frames
+       FROM inspections
+       INNER JOIN hives ON inspections.hive_id = hives.id
+       WHERE inspections.hive_id = $1
+       ORDER BY inspections.inspection_date DESC`,
       [hive_id]
     );
+
     res.json(result.rows);
   } catch (error) {
     console.error("Error fetching inspections:", error);
     res.status(500).json({ error: "Server error while fetching inspections" });
   }
 });
+
 
 /**
  * Retrieve hives that require a revisit.
