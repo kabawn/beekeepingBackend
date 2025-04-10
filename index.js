@@ -24,6 +24,13 @@ const supersRouter = require("./routes/supers");
 const harvestsRouter = require("./routes/harvests");
 const harvestAnalysisRouter = require("./routes/harvestAnalysis");
 const inspectionsRoutes = require("./routes/inspections");
+const authRoutes = require("./routes/auth");
+const companiesRouter = require('./routes/companies');
+const invitationsRoutes = require('./routes/invitations');
+const hivesQrPdfRouter = require('./routes/hivesQrPdf');
+const apiaryNotesRouter = require('./routes/apiaryNotes');
+const queenPedigreeRouter = require('./routes/queenPedigree');
+const queenCharacteristicsRouter = require('./routes/queenCharacteristics');
 
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
@@ -33,6 +40,13 @@ app.use("/api/supers", supersRouter);
 app.use("/api/harvests", harvestsRouter);
 app.use("/api/harvest-analysis", harvestAnalysisRouter);
 app.use("/api/inspections", inspectionsRoutes);
+app.use("/api/auth", authRoutes);
+app.use('/api/companies', companiesRouter);
+app.use('/api/invitations', invitationsRoutes);
+app.use('/api/hives', hivesQrPdfRouter);
+app.use('/api/apiary-notes', apiaryNotesRouter);
+app.use('/api/queen-pedigree', queenPedigreeRouter);
+app.use('/api/queen-characteristics', queenCharacteristicsRouter);
 
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");

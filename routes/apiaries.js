@@ -1,21 +1,71 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const supabase = require('../utils/supabaseClient');
+const authenticateUser = require('../middlewares/authMiddleware');
+// // Create a new apiary (already done)
+// router.post('/', async (req, res) => {
+//   const { name, city, land_owner, phone, latitude, longitude, altitude } = req.body;
+//   try {
+//     const result = await pool.query(
+//       `INSERT INTO apiaries (name, city, land_owner, phone, latitude, longitude, altitude)
+//        VALUES ($1, $2, $3, $4, $5, $6, $7)
+//        RETURNING *`,
+//       [name, city, land_owner, phone, latitude, longitude, altitude]
+//     );
+//     res.status(201).json(result.rows[0]);
+//   } catch (error) {
+//     console.error('Error creating apiary:', error);
+//     res.status(500).json({ error: 'Server error while creating apiary' });
+//   }
+// });
 
-// Create a new apiary (already done)
-router.post('/', async (req, res) => {
-  const { name, city, land_owner, phone, latitude, longitude, altitude } = req.body;
+// 🐝 إنشاء منحل جديد
+router.post('/', authenticateUser, async (req, res) => {
+  const {
+    apiary_name,
+    location,
+    commune,
+    department,
+    land_owner_name,
+    phone,
+    company_id // اختياري: إذا كان المستخدم ينتمي لشركة
+  } = req.body;
+
+  if (!apiary_name || !location) {
+    return res.status(400).json({ error: 'apiary_name and location are required.' });
+  }
+
   try {
-    const result = await pool.query(
-      `INSERT INTO apiaries (name, city, land_owner, phone, latitude, longitude, altitude)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [name, city, land_owner, phone, latitude, longitude, altitude]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error('Error creating apiary:', error);
-    res.status(500).json({ error: 'Server error while creating apiary' });
+    const insertData = {
+      apiary_name,
+      location,
+      commune,
+      department,
+      land_owner_name,
+      phone,
+      created_at: new Date()
+    };
+
+    // تحديد المالك: شركة أو فرد
+    if (company_id) {
+      insertData.company_id = company_id;
+    } else {
+      insertData.owner_user_id = req.user.id;
+    }
+
+    const { data, error } = await supabase
+      .from('apiaries')
+      .insert([insertData])
+      .select();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(201).json({ message: '✅ Apiary created successfully', apiary: data[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Unexpected server error' });
   }
 });
 

@@ -1,128 +1,130 @@
 // routes/queens.js
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const pool = require("../db"); // Ensure your db.js exports the PostgreSQL connection pool
+const { v4: uuidv4 } = require('uuid');
+const QRCode = require('qrcode');
+const { createCanvas, loadImage } = require('canvas');
+const supabase = require('../utils/supabaseClient');
+const authenticateUser = require('../middlewares/authMiddleware');
 
-/**
- * Create a new queen.
- * Expects a JSON body with:
- * - queen_code (string) - the special code for the queen
- * - mothers_code (string)
- * - father_code (string)
- * - grafting_date (string, in YYYY-MM-DD format)
- * - introduction_date (string, in YYYY-MM-DD format)
- * - hive_id (number, optional)
- */
-router.post("/", async (req, res) => {
-   const { queen_code, mothers_code, father_code, grafting_date, introduction_date, hive_id } =
-      req.body;
-   try {
-      const result = await pool.query(
-         `INSERT INTO queens (queen_code, mothers_code, father_code, grafting_date, introduction_date, hive_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-         [queen_code, mothers_code, father_code, grafting_date, introduction_date, hive_id]
-      );
-      res.status(201).json(result.rows[0]);
-   } catch (error) {
-      console.error("Full error object:", error);
-      if (error.code === "23503") {
-         // Return a client error status (400) instead of 500
-         res.status(400).json({
-            error: "Invalid hive_id. The Hive ID you entered does not exist.",
-         });
-      } else {
-         res.status(500).json({ error: "Server error while creating queen" });
-      }
-   }
-});
+// 👑 إنشاء ملكة جديدة
+router.post('/', authenticateUser, async (req, res) => {
+  const {
+    grafting_date,
+    strain_name,
+    opalite_color,
+    expected_traits,
+    hive_id
+  } = req.body;
 
-/**
- * Retrieve all queens.
- */
-router.get("/", async (req, res) => {
-   try {
-      const result = await pool.query("SELECT * FROM queens ORDER BY id ASC");
-      res.json(result.rows);
-   } catch (error) {
-      console.error("Error fetching queens:", error);
-      res.status(500).json({ error: "Server error while fetching queens" });
-   }
-});
-
-/**
- * Retrieve a single queen by ID.
- */
-router.get("/:id", async (req, res) => {
-   const { id } = req.params;
-   try {
-      const result = await pool.query("SELECT * FROM queens WHERE id = $1", [id]);
-      if (result.rows.length === 0) {
-         return res.status(404).json({ error: "Queen not found" });
-      }
-      res.json(result.rows[0]);
-   } catch (error) {
-      console.error("Error fetching queen:", error);
-      res.status(500).json({ error: "Server error while fetching queen" });
-   }
-});
-
-/**
- * Update an existing queen.
- * Expects a JSON body with the fields to update.
- */
-router.put("/:id", async (req, res) => {
-   const { id } = req.params;
-   const { queen_code, mothers_code, father_code, grafting_date, introduction_date, hive_id } =
-      req.body;
-   try {
-      const result = await pool.query(
-         `UPDATE queens 
-       SET queen_code = $1, mothers_code = $2, father_code = $3, grafting_date = $4, introduction_date = $5, hive_id = $6 
-       WHERE id = $7 RETURNING *`,
-         [queen_code, mothers_code, father_code, grafting_date, introduction_date, hive_id, id]
-      );
-      if (result.rows.length === 0) {
-         return res.status(404).json({ error: "Queen not found" });
-      }
-      res.json(result.rows[0]);
-   } catch (error) {
-      console.error("Error updating queen:", error);
-      res.status(500).json({ error: "Server error while updating queen" });
-   }
-});
-
-
-// Retrieve a single queen by queen_code (i.e. the queen identifier)
-router.get('/identifier/:queen_identifier', async (req, res) => {
-  const { queen_identifier } = req.params;
   try {
-    const result = await pool.query('SELECT * FROM queens WHERE queen_code = $1', [queen_identifier]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Queen not found' });
-    }
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Error fetching queen by identifier:', error);
-    res.status(500).json({ error: 'Server error while fetching queen' });
+    const { data: queens, error: countError } = await supabase
+      .from('queens')
+      .select('queen_id');
+
+    const count = queens?.length || 0;
+    const queenCode = `Q-${String(count + 1).padStart(3, '0')}`;
+    const publicKey = uuidv4();
+
+    const { data, error } = await supabase
+      .from('queens')
+      .insert([{
+        queen_code: queenCode,
+        public_key: publicKey,
+        grafting_date,
+        strain_name,
+        opalite_color,
+        expected_traits,
+        hive_id
+      }])
+      .select();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.status(201).json({ message: '✅ Queen created successfully', queen: data[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
   }
 });
 
-/**
- * Delete a queen by ID.
- */
-router.delete("/:id", async (req, res) => {
-   const { id } = req.params;
-   try {
-      const result = await pool.query("DELETE FROM queens WHERE id = $1 RETURNING *", [id]);
-      if (result.rows.length === 0) {
-         return res.status(404).json({ error: "Queen not found" });
-      }
-      res.json({ message: "Queen deleted successfully", queen: result.rows[0] });
-   } catch (error) {
-      console.error("Error deleting queen:", error);
-      res.status(500).json({ error: "Server error while deleting queen" });
-   }
+// 📋 عرض جميع الملكات
+router.get('/', authenticateUser, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('queens')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(200).json({ queens: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
+// ✏️ تحديث ملكة (ربطها بخلية أو تعديل بيانات)
+router.patch('/:queen_id', authenticateUser, async (req, res) => {
+  const { queen_id } = req.params;
+  const updateFields = req.body;
+
+  try {
+    const { data, error } = await supabase
+      .from('queens')
+      .update(updateFields)
+      .eq('queen_id', queen_id)
+      .select();
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(200).json({ message: '✅ Queen updated successfully', queen: data[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
+// 🖼️ تحميل صورة QR لملكة
+router.get('/qr-download/:public_key', async (req, res) => {
+  const { public_key } = req.params;
+
+  try {
+    const { data: queen, error } = await supabase
+      .from('queens')
+      .select('queen_code, strain_name')
+      .eq('public_key', public_key)
+      .single();
+
+    if (error || !queen) {
+      return res.status(404).json({ error: 'Queen not found' });
+    }
+
+    const qrUrl = `https://yourapp.com/queen/${public_key}`;
+    const qrDataUrl = await QRCode.toDataURL(qrUrl);
+    const canvas = createCanvas(300, 360);
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const qrImg = await loadImage(qrDataUrl);
+    ctx.drawImage(qrImg, 25, 20, 250, 250);
+
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 20px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Ruche: ${queen.queen_code}`, 150, 300);
+    ctx.font = '16px Arial';
+    ctx.fillText(queen.strain_name || '', 150, 340);
+
+    const buffer = canvas.toBuffer('image/png');
+    res.setHeader('Content-Disposition', `attachment; filename=queen-${queen.queen_code}.png`);
+    res.setHeader('Content-Type', 'image/png');
+    res.send(buffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: '❌ Failed to generate QR image' });
+  }
 });
 
 module.exports = router;

@@ -1,176 +1,124 @@
-const express = require("express");
+// routes/inspections.js
+const express = require('express');
 const router = express.Router();
-const pool = require("../db"); // PostgreSQL connection pool
+const supabase = require('../utils/supabaseClient');
+const authenticateUser = require('../middlewares/authMiddleware');
 
-/**
- * Add a new inspection record for a hive
- * Expects a JSON body with:
- * - hive_id (number)
- * - inspector_name (string)
- * - brood_status (string)
- * - queen_status (string)
- * - food_storage (string)
- * - disease_signs (string)
- * - mite_count (number, optional)
- * - notes (string)
- * - revisit_needed (boolean)
- * - revisit_reason (string, optional)
- * - image_url (string, optional)
- */
-router.post("/", async (req, res) => {
+// ✅ تسجيل فحص جديد لخلية
+router.post('/', authenticateUser, async (req, res) => {
   const {
     hive_id,
-    inspector_name,
-    brood_status,
-    queen_status,
+    inspection_date,
+    queen_seen,
+    eggs_seen,
+    queen_cell_present,
+    brood_quality,
     food_storage,
-    disease_signs,
-    mite_count,
-    notes,
+    sickness_signs,
+    frame_count,
     revisit_needed,
-    revisit_reason,
-    image_url,
-    current_frames, // 🟢 New field to store the current number of frames
+    revisit_date,
+    notes
   } = req.body;
 
+  if (!hive_id) {
+    return res.status(400).json({ error: 'hive_id is required' });
+  }
+
   try {
-    // ✅ Get total frames from the hives table
-    const hiveResult = await pool.query(
-      "SELECT total_frames FROM hives WHERE id = $1",
-      [hive_id]
-    );
-
-    if (hiveResult.rows.length === 0) {
-      return res.status(404).json({ error: "Hive not found" });
-    }
-
-    const total_frames = hiveResult.rows[0].total_frames;
-    const missing_frames = total_frames - current_frames; // 🔥 Calculate missing frames
-
-    // ✅ Insert inspection record with current and missing frames
-    const result = await pool.query(
-      `INSERT INTO inspections 
-        (hive_id, inspector_name, brood_status, queen_status, food_storage, disease_signs, mite_count, notes, revisit_needed, revisit_reason, image_url, current_frames)
-       VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *`,
-      [
+    const { data, error } = await supabase
+      .from('hive_inspections')
+      .insert([{
         hive_id,
-        inspector_name,
-        brood_status,
-        queen_status,
+        inspection_date: inspection_date || new Date().toISOString().split('T')[0],
+        queen_seen,
+        eggs_seen,
+        queen_cell_present,
+        brood_quality,
         food_storage,
-        disease_signs,
-        mite_count || null,
-        notes,
+        sickness_signs,
+        frame_count,
         revisit_needed,
-        revisit_reason || null,
-        image_url || null,
-        current_frames,
-      ]
-    );
+        revisit_date,
+        notes,
+        user_id: req.user.id
+      }])
+      .select();
 
-    // ✅ Send response with missing frames
-    res.status(201).json({ 
-      ...result.rows[0], 
-      total_frames, 
-      missing_frames 
-    });
-
-  } catch (error) {
-    console.error("Error creating inspection:", error);
-    res.status(500).json({ error: "Server error while creating inspection" });
-  }
-});
-
-
-/**
- * Retrieve all inspections for a specific hive.
- */
-router.get("/", async (req, res) => {
-  const { hive_id } = req.query;
-
-  if (!hive_id) {
-    return res.status(400).json({ error: "Missing hive_id parameter" });
-  }
-
-  try {
-    // ✅ Fetch inspections with total_frames from the hives table
-    const result = await pool.query(
-      `SELECT 
-          inspections.*, 
-          hives.total_frames, 
-          (hives.total_frames - inspections.current_frames) AS missing_frames
-       FROM inspections
-       INNER JOIN hives ON inspections.hive_id = hives.id
-       WHERE inspections.hive_id = $1
-       ORDER BY inspections.inspection_date DESC`,
-      [hive_id]
-    );
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Error fetching inspections:", error);
-    res.status(500).json({ error: "Server error while fetching inspections" });
-  }
-});
-
-
-/**
- * Retrieve hives that require a revisit.
- */
-router.get("/", async (req, res) => {
-  const { hive_id } = req.query;
-
-  if (!hive_id) {
-    return res.status(400).json({ error: "Missing hive_id parameter" });
-  }
-
-  try {
-    // ✅ Get total frames from the hives table
-    const hiveResult = await pool.query(
-      "SELECT total_frames FROM hives WHERE id = $1",
-      [hive_id]
-    );
-
-    if (hiveResult.rows.length === 0) {
-      return res.status(404).json({ error: "Hive not found" });
+    if (error) {
+      return res.status(400).json({ error: error.message });
     }
 
-    const total_frames = hiveResult.rows[0].total_frames;
-
-    // ✅ Get inspections and calculate missing frames dynamically
-    const result = await pool.query(
-      `SELECT *, $1 - current_frames AS missing_frames
-       FROM inspections
-       WHERE hive_id = $2
-       ORDER BY inspection_date DESC`,
-      [total_frames, hive_id]
-    );
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error("Error fetching inspections:", error);
-    res.status(500).json({ error: "Server error while fetching inspections" });
+    res.status(201).json({ message: '✅ Inspection recorded successfully', inspection: data[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
   }
 });
 
-
-/**
- * Delete an inspection record.
- */
-router.delete("/:id", async (req, res) => {
-  const { id } = req.params;
+// 📥 جلب كل الفحوصات لخلية معينة
+router.get('/hive/:hive_id', authenticateUser, async (req, res) => {
+  const { hive_id } = req.params;
 
   try {
-    const result = await pool.query("DELETE FROM inspections WHERE id = $1 RETURNING *", [id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Inspection not found" });
+    const { data, error } = await supabase
+      .from('hive_inspections')
+      .select('*')
+      .eq('hive_id', hive_id)
+      .order('inspection_date', { ascending: false });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
     }
-    res.json({ message: "Inspection deleted successfully", inspection: result.rows[0] });
-  } catch (error) {
-    console.error("Error deleting inspection:", error);
-    res.status(500).json({ error: "Server error while deleting inspection" });
+
+    res.status(200).json({ inspections: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
+// 🔔 تنبيهات حسب الفلتر (today, overdue, upcoming, all) + بيانات الخلية والمنحل
+router.get('/alerts/revisits', authenticateUser, async (req, res) => {
+  const filter = req.query.filter || 'today';
+  const today = new Date().toISOString().split('T')[0];
+
+  try {
+    let query = supabase
+      .from('hive_inspections')
+      .select(`
+        inspection_id,
+        hive_id,
+        revisit_date,
+        revisit_needed,
+        hives(
+          hive_code,
+          apiary_id,
+          apiaries(apiary_name, commune, department)
+        )
+      `)
+      .eq('revisit_needed', true);
+
+    if (filter === 'today') {
+      query = query.eq('revisit_date', today);
+    } else if (filter === 'overdue') {
+      query = query.lt('revisit_date', today);
+    } else if (filter === 'upcoming') {
+      query = query.gt('revisit_date', today);
+    }
+
+    query = query.order('revisit_date', { ascending: true });
+
+    const { data, error } = await query;
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(200).json({ alerts: data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
   }
 });
 
