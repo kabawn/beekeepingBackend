@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const supabase = require('../utils/supabaseClient');
 const authenticateUser = require('../middlewares/authMiddleware');
 
