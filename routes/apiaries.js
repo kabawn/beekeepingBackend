@@ -4,42 +4,50 @@ const pool = require("../db");
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-// 🐝 إنشاء منحل جديد
-router.post("/", authenticateUser, async (req, res) => {
-   const { apiary_name, location, commune, department, land_owner_name, phone, company_id } =
-      req.body;
+// إنشاء منحل جديد
+router.post("/", authenticate, async (req, res) => {
+  const userId = req.user.id;
+  const { apiary_name, location, commune, department, land_owner_name, phone } = req.body;
 
-   if (!apiary_name || !location) {
-      return res.status(400).json({ error: "apiary_name and location are required." });
-   }
+  try {
+     // جلب نوع اشتراك المستخدم
+     const subResult = await pool.query(
+        "SELECT plan_type FROM subscriptions WHERE user_id = $1 LIMIT 1",
+        [userId]
+     );
 
-   try {
-      const insertData = {
-         apiary_name,
-         location,
-         commune,
-         department,
-         land_owner_name,
-         phone,
-         created_at: new Date(),
-      };
+     const planType = subResult.rows[0]?.plan_type || "free";
 
-      if (company_id) {
-         insertData.company_id = company_id;
-      } else {
-         insertData.owner_user_id = req.user.id;
-      }
+     // إذا كان الاشتراك free، نتحقق من عدد المناحل
+     if (planType === "free") {
+        const countResult = await pool.query(
+           "SELECT COUNT(*) FROM apiaries WHERE owner_user_id = $1",
+           [userId]
+        );
 
-      const { data, error } = await supabase.from("apiaries").insert([insertData]).select();
+        const apiaryCount = parseInt(countResult.rows[0].count, 10);
 
-      if (error) {
-         return res.status(400).json({ error: error.message });
-      }
+        if (apiaryCount >= 1) {
+           return res.status(403).json({
+              error: "Free users can only create one apiary. Please upgrade your plan.",
+           });
+        }
+     }
 
-      res.status(201).json({ message: "✅ Apiary created successfully", apiary: data[0] });
-   } catch (err) {
-      res.status(500).json({ error: "Unexpected server error" });
-   }
+     // إنشاء المنحل
+     const insertResult = await pool.query(
+        `INSERT INTO apiaries (apiary_name, location, commune, department, land_owner_name, phone, owner_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [apiary_name, location, commune, department, land_owner_name, phone, userId]
+     );
+
+     return res.status(201).json({ apiary: insertResult.rows[0] });
+
+  } catch (error) {
+     console.error("Error creating apiary:", error);
+     return res.status(500).json({ error: "Server error while creating apiary" });
+  }
 });
 
 // ✅ عدد الخلايا في منحل معين
