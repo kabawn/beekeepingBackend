@@ -1,79 +1,86 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const supabase = require('../utils/supabaseClient');
+const supabase = require("../utils/supabaseClient");
 
 // ✅ تسجيل مستخدم جديد
-router.post('/signup', async (req, res) => {
-  const { email, password, full_name } = req.body;
+router.post("/signup", async (req, res) => {
+   const { email, password, full_name } = req.body;
 
-  // 🔍 تحقق من وجود الحقول المطلوبة
-  if (!email || !password || !full_name) {
-    return res.status(400).json({ error: 'email, password, and full_name are required' });
-  }
-
-  try {
-    // 1️⃣ إنشاء المستخدم في Supabase Auth
-    const { data: userData, error: signUpError } = await supabase.auth.admin.createUser({
+   // 1. إنشاء المستخدم
+   const { data: userData, error: signUpError } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true
-    });
+      email_confirm: true,
+   });
 
-    if (signUpError) {
-      return res.status(400).json({ error: `Auth error: ${signUpError.message}` });
-    }
+   if (signUpError) {
+      return res.status(400).json({ error: signUpError.message });
+   }
 
-    const userId = userData.user.id;
+   const userId = userData.user.id;
 
-    // 2️⃣ إضافة بيانات المستخدم في جدول user_profiles
-    const { error: profileError } = await supabase
-      .from('user_profiles')
+   // 2. إضافة الملف الشخصي
+   const { error: profileError } = await supabase
+      .from("user_profiles")
       .insert([{ user_id: userId, full_name }]);
 
-    if (profileError) {
-      return res.status(400).json({ error: `Profile error: ${profileError.message}` });
-    }
+   if (profileError) {
+      return res.status(400).json({ error: profileError.message });
+   }
 
-    // ✅ النجاح
-    res.status(201).json({ message: '✅ User created successfully', userId });
-  } catch (err) {
-    console.error('Unexpected error during signup:', err.message);
-    res.status(500).json({ error: 'Unexpected server error. Please try again.' });
-  }
+   // 3. إنشاء اشتراك مجاني
+   const { error: subscriptionError } = await supabase
+      .from("subscriptions")
+      .insert([{ user_id: userId, plan_type: "free" }]);
+
+   if (subscriptionError) {
+      return res.status(400).json({ error: subscriptionError.message });
+   }
+
+   return res.status(201).json({ message: "✅ User created successfully", userId });
 });
 
-// تسجيل الدخول
-router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
-  
-    // تحقق من الحقول
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-  
-    try {
-      // تسجيل الدخول عبر Supabase
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
+
+// ✅ تسجيل الدخول
+router.post("/login", async (req, res) => {
+   const { email, password } = req.body;
+
+   if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+   }
+
+   try {
+      // تسجيل الدخول
+      const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({
+         email,
+         password,
       });
-  
-      if (error) {
-        return res.status(401).json({ error: error.message });
+
+      if (signInError) {
+         return res.status(401).json({ error: signInError.message });
       }
-  
-      // session + user info
-      res.status(200).json({
-        message: '✅ Login successful',
-        user: data.user,
-        access_token: data.session.access_token,
-        refresh_token: data.session.refresh_token
+
+      const user = sessionData.user;
+      const session = sessionData.session;
+
+      // جلب نوع الاشتراك
+      const { data: subscriptionData } = await supabase
+         .from("subscriptions")
+         .select("plan_type")
+         .eq("user_id", user.id)
+         .single();
+
+      return res.status(200).json({
+         message: "✅ Login successful",
+         user,
+         access_token: session.access_token,
+         refresh_token: session.refresh_token,
+         plan: subscriptionData?.plan_type || "free",
       });
-    } catch (err) {
-      console.error('Login error:', err.message);
-      res.status(500).json({ error: 'Unexpected server error. Try again.' });
-    }
-  });
-  
+   } catch (err) {
+      console.error("Login error:", err.message);
+      return res.status(500).json({ error: "Unexpected server error. Try again." });
+   }
+});
 
 module.exports = router;
