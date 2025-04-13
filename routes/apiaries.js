@@ -5,7 +5,7 @@ const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
 // إنشاء منحل جديد
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticateUser, async (req, res) => {
   const userId = req.user.id;
   const { apiary_name, location, commune, department, land_owner_name, phone } = req.body;
 

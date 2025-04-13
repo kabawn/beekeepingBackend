@@ -19,7 +19,25 @@ const authenticateUser = async (req, res, next) => {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  req.user = data.user; // user.id => UUID
+  const user = data.user;
+
+  // ✅ جلب plan_type من جدول subscriptions
+  const { data: subscription, error: subError } = await supabase
+    .from("subscriptions")
+    .select("plan_type")
+    .eq("user_id", user.id)
+    .single();
+
+  if (subError) {
+    console.error("Error fetching subscription:", subError.message);
+  }
+
+  req.user = {
+    id: user.id,
+    email: user.email,
+    plan_type: subscription?.plan_type || "free", // افتراضيًا free إذا لم يوجد شيء
+  };
+
   next();
 };
 
