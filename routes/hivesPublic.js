@@ -52,8 +52,9 @@ router.get("/public/:public_key", async (req, res) => {
          label = company?.company_name || label;
       } else if (apiary?.owner_user_id) {
          // 👤 جلب اسم صاحب المنحل
+         // 👤 جلب اسم صاحب المنحل من جدول user_profiles
          const { data: user } = await supabase
-            .from("users")
+            .from("user_profiles")
             .select("full_name")
             .eq("user_id", apiary.owner_user_id)
             .single();
