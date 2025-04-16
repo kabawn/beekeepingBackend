@@ -1,18 +1,19 @@
 // routes/hivesPublic.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const supabase = require('../utils/supabaseClient');
+const supabase = require("../utils/supabaseClient");
 
 // 📡 راوت جلب بيانات الخلية من public_key
 // 📡 راوت جلب بيانات الخلية من public_key
-router.get('/public/:public_key', async (req, res) => {
-  const { public_key } = req.params;
+router.get("/public/:public_key", async (req, res) => {
+   const { public_key } = req.params;
 
-  try {
-    // 🐝 جلب بيانات الخلية
-    const { data: hive, error: hiveError } = await supabase
-      .from('hives')
-      .select(`
+   try {
+      // 🐝 جلب بيانات الخلية
+      const { data: hive, error: hiveError } = await supabase
+         .from("hives")
+         .select(
+            `
         hive_id,
         hive_code,
         hive_type,
@@ -21,60 +22,54 @@ router.get('/public/:public_key', async (req, res) => {
         frame_capacity,
         apiary_id,
         created_at
-      `)
-      .eq('public_key', public_key)
-      .single();
+      `
+         )
+         .eq("public_key", public_key)
+         .single();
 
-    if (hiveError || !hive) {
-      return res.status(404).json({ error: 'Hive not found' });
-    }
-
-    // 🌱 جلب بيانات المنحل المرتبط بالخلية
-    const { data: apiary } = await supabase
-      .from('apiaries')
-      .select('apiary_name, commune, department, company_id, owner_user_id')
-      .eq('apiary_id', hive.apiary_id)
-      .single();
-
-    let label = 'Hive Owner';
-
-    // 🏢 إذا كان المنحل مرتبط بشركة، استخدم اسم الشركة
-    if (apiary?.company_id) {
-      const { data: company } = await supabase
-        .from('companies')
-        .select('company_name')
-        .eq('company_id', apiary.company_id)
-        .single();
-
-      if (company?.company_name) {
-        label = company.company_name;
+      if (hiveError || !hive) {
+         return res.status(404).json({ error: "Hive not found" });
       }
 
-    // 👤 إذا لم توجد شركة، استخدم اسم المالك من جدول المستخدمين
-    } else if (apiary?.owner_user_id) {
-      const { data: user } = await supabase
-        .from('users')
-        .select('full_name')
-        .eq('user_id', apiary.owner_user_id)
-        .single();
+      // 🌱 جلب بيانات المنحل المرتبط بالخلية
+      const { data: apiary } = await supabase
+         .from("apiaries")
+         .select("apiary_name, commune, department, company_id, owner_user_id")
+         .eq("apiary_id", hive.apiary_id)
+         .single();
 
-      if (user?.full_name) {
-        label = user.full_name;
+      let label = "Hive Owner";
+
+      // 🏢 إذا كان المنحل مرتبط بشركة، استخدم اسم الشركة
+      if (apiary?.company_id) {
+         // 🏢 جلب اسم الشركة
+         const { data: company } = await supabase
+            .from("companies")
+            .select("company_name")
+            .eq("company_id", apiary.company_id)
+            .single();
+
+         label = company?.company_name || label;
+      } else if (apiary?.owner_user_id) {
+         // 👤 جلب اسم صاحب المنحل
+         const { data: user } = await supabase
+            .from("users")
+            .select("full_name")
+            .eq("user_id", apiary.owner_user_id)
+            .single();
+
+         label = user?.full_name || label;
       }
-    }
 
-    return res.json({
-      hive,
-      apiary,
-      label
-    });
-
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Unexpected server error' });
-  }
+      return res.json({
+         hive,
+         apiary,
+         label,
+      });
+   } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
 });
 
 module.exports = router;
-
-
