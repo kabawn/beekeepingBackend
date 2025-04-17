@@ -1,98 +1,44 @@
-const express = require("express");
-const router = express.Router();
-const supabase = require("../utils/supabaseClient");
-const authenticateUser = require("../middlewares/authenticateUser");
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
 
-// 📡 راوت جلب بيانات الخلية من public_key + حماية
-router.get("/public/:public_key", authenticateUser, async (req, res) => {
-   const { public_key } = req.params;
-   const user_id = req.user.id;
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-   try {
-      // 🐝 جلب بيانات الخلية
-      const { data: hive, error: hiveError } = await supabase
-         .from("hives")
-         .select(`
-            hive_id,
-            hive_code,
-            hive_type,
-            hive_purpose,
-            empty_weight,
-            frame_capacity,
-            apiary_id,
-            created_at,
-            public_key
-         `)
-         .eq("public_key", public_key)
-         .single();
+const authenticateUser = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1]; // Bearer TOKEN
 
-      if (hiveError || !hive) {
-         return res.status(404).json({ error: "Hive not found" });
-      }
+  if (!token) {
+    return res.status(401).json({ error: 'Missing access token' });
+  }
 
-      // 🌱 جلب بيانات المنحل المرتبط بالخلية
-      const { data: apiary } = await supabase
-         .from("apiaries")
-         .select("apiary_name, commune, department, company_id, owner_user_id")
-         .eq("apiary_id", hive.apiary_id)
-         .single();
+  const { data, error } = await supabase.auth.getUser(token);
 
-      if (!apiary) {
-         return res.status(404).json({ error: "Apiary not found" });
-      }
+  if (error || !data?.user) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
 
-      // 🔐 تحقق من الصلاحية
-      let hasAccess = false;
+  const user = data.user;
 
-      // 👤 إذا كان المستخدم هو صاحب المنحل
-      if (apiary.owner_user_id === user_id) {
-         hasAccess = true;
-      }
+  // ✅ جلب plan_type من جدول subscriptions
+  const { data: subscription, error: subError } = await supabase
+    .from("subscriptions")
+    .select("plan_type")
+    .eq("user_id", user.id)
+    .single();
 
-      // 🏢 أو إذا كان المستخدم تابع لنفس الشركة
-      else if (apiary.company_id) {
-         const { data: userProfile } = await supabase
-            .from("user_profiles")
-            .select("company_id")
-            .eq("user_id", user_id)
-            .single();
+  if (subError) {
+    console.error("Error fetching subscription:", subError.message);
+  }
 
-         if (userProfile?.company_id === apiary.company_id) {
-            hasAccess = true;
-         }
-      }
+  req.user = {
+    id: user.id,
+    email: user.email,
+    plan_type: subscription?.plan_type || "free", // افتراضيًا free إذا لم يوجد شيء
+  };
 
-      if (!hasAccess) {
-         return res.status(403).json({ error: "Access denied" });
-      }
+  next();
+};
 
-      // 🎫 إعداد الليبل للعرض
-      let label = "Hive Owner";
-      if (apiary.company_id) {
-         const { data: company } = await supabase
-            .from("companies")
-            .select("company_name")
-            .eq("company_id", apiary.company_id)
-            .single();
-         label = company?.company_name || label;
-      } else if (apiary.owner_user_id) {
-         const { data: user } = await supabase
-            .from("user_profiles")
-            .select("full_name")
-            .eq("user_id", apiary.owner_user_id)
-            .single();
-         label = user?.full_name || label;
-      }
-
-      return res.json({
-         hive,
-         apiary,
-         label,
-      });
-   } catch (err) {
-      console.error("❌ Server Error:", err);
-      return res.status(500).json({ error: "Unexpected server error" });
-   }
-});
-
-module.exports = router;
+module.exports = authenticateUser;

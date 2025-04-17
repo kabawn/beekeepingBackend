@@ -1,30 +1,28 @@
-// routes/hivesPublic.js
 const express = require("express");
 const router = express.Router();
 const supabase = require("../utils/supabaseClient");
+const authenticateUser = require("../middlewares/authMiddleware");
 
-// 📡 راوت جلب بيانات الخلية من public_key
-// 📡 راوت جلب بيانات الخلية من public_key
-router.get("/public/:public_key", async (req, res) => {
+// 📡 راوت جلب بيانات الخلية من public_key + حماية
+router.get("/public/:public_key", authenticateUser, async (req, res) => {
    const { public_key } = req.params;
+   const user_id = req.user.id;
 
    try {
       // 🐝 جلب بيانات الخلية
       const { data: hive, error: hiveError } = await supabase
          .from("hives")
-         .select(
-            `
-        hive_id,
-        hive_code,
-        hive_type,
-        hive_purpose,
-        empty_weight,
-        frame_capacity,
-        apiary_id,
-        created_at,
-        public_key
-      `
-         )
+         .select(`
+            hive_id,
+            hive_code,
+            hive_type,
+            hive_purpose,
+            empty_weight,
+            frame_capacity,
+            apiary_id,
+            created_at,
+            public_key
+         `)
          .eq("public_key", public_key)
          .single();
 
@@ -39,27 +37,50 @@ router.get("/public/:public_key", async (req, res) => {
          .eq("apiary_id", hive.apiary_id)
          .single();
 
-      let label = "Hive Owner";
+      if (!apiary) {
+         return res.status(404).json({ error: "Apiary not found" });
+      }
 
-      // 🏢 إذا كان المنحل مرتبط بشركة، استخدم اسم الشركة
-      if (apiary?.company_id) {
-         // 🏢 جلب اسم الشركة
+      // 🔐 تحقق من الصلاحية
+      let hasAccess = false;
+
+      // 👤 إذا كان المستخدم هو صاحب المنحل
+      if (apiary.owner_user_id === user_id) {
+         hasAccess = true;
+      }
+
+      // 🏢 أو إذا كان المستخدم تابع لنفس الشركة
+      else if (apiary.company_id) {
+         const { data: userProfile } = await supabase
+            .from("user_profiles")
+            .select("company_id")
+            .eq("user_id", user_id)
+            .single();
+
+         if (userProfile?.company_id === apiary.company_id) {
+            hasAccess = true;
+         }
+      }
+
+      if (!hasAccess) {
+         return res.status(403).json({ error: "Access denied" });
+      }
+
+      // 🎫 إعداد الليبل للعرض
+      let label = "Hive Owner";
+      if (apiary.company_id) {
          const { data: company } = await supabase
             .from("companies")
             .select("company_name")
             .eq("company_id", apiary.company_id)
             .single();
-
          label = company?.company_name || label;
-      } else if (apiary?.owner_user_id) {
-         // 👤 جلب اسم صاحب المنحل
-         // 👤 جلب اسم صاحب المنحل من جدول user_profiles
+      } else if (apiary.owner_user_id) {
          const { data: user } = await supabase
             .from("user_profiles")
             .select("full_name")
             .eq("user_id", apiary.owner_user_id)
             .single();
-
          label = user?.full_name || label;
       }
 
@@ -69,7 +90,7 @@ router.get("/public/:public_key", async (req, res) => {
          label,
       });
    } catch (err) {
-      console.error(err);
+      console.error("❌ Server Error:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
 });
