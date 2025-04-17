@@ -14,16 +14,16 @@ router.get("/public/:public_key", async (req, res) => {
          .from("hives")
          .select(
             `
-      hive_id,
-      hive_code,
-      hive_type,
-      hive_purpose,
-      empty_weight,
-      frame_capacity,
-      apiary_id,
-      created_at,
-      public_key -- ✅ أضف هذا السطر فقط
-   `
+        hive_id,
+        hive_code,
+        hive_type,
+        hive_purpose,
+        empty_weight,
+        frame_capacity,
+        apiary_id,
+        created_at,
+        public_key
+      `
          )
          .eq("public_key", public_key)
          .single();
