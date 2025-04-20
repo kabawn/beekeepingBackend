@@ -54,136 +54,136 @@ router.get("/:id", authenticateUser, async (req, res) => {
 
 // ✅ إنشاء عاسلة جديدة
 router.post("/", authenticateUser, async (req, res) => {
-   const {
-      super_code,
-      super_type,
-      purpose_super,
-      qr_code,
-      weight_empty,
-      active,
-      service_in,
-      hive_id,
-      public_key
-   } = req.body;
+  const {
+     super_type,
+     purpose_super,
+     qr_code,
+     weight_empty,
+     active,
+     service_in,
+     hive_id,
+     public_key
+  } = req.body;
 
-   try {
-      let finalPublicKey = public_key;
-      let finalSuperCode = super_code;
+  try {
+     let finalPublicKey = public_key?.trim() || null;
+     let finalSuperCode = null;
 
-      if (public_key) {
-         // ✅ تحقق إذا كان public_key مستخدم مسبقاً
-         const { data: existingSuper } = await supabase
-            .from("supers")
-            .select("super_id")
-            .eq("public_key", public_key)
-            .maybeSingle();
+     // ✅ إذا تم تمرير public_key
+     if (finalPublicKey) {
+        // تحقق هل تم استخدامه من قبل
+        const { data: existing } = await supabase
+           .from("supers")
+           .select("super_id")
+           .eq("public_key", finalPublicKey)
+           .maybeSingle();
 
-         if (existingSuper) {
-            return res.status(400).json({ error: "Public key already used" });
-         }
+        if (existing) {
+           return res.status(400).json({ error: "Public key already used" });
+        }
 
-         // ✅ جلب super_code من available_public_keys
-         const { data: availableKey } = await supabase
-            .from("available_public_keys")
-            .select("code")
-            .eq("public_key", public_key)
-            .single();
+        // جلب super_code من جدول available_public_keys
+        const { data: available } = await supabase
+           .from("available_public_keys")
+           .select("code")
+           .eq("public_key", finalPublicKey)
+           .single();
 
-         if (!availableKey) {
-            return res.status(400).json({ error: "Public key not found in available list" });
-         }
+        if (!available?.code) {
+           return res.status(400).json({ error: "Public key not found in available list" });
+        }
 
-         finalSuperCode = availableKey.code;
+        finalSuperCode = available.code;
 
-         // ✅ حذف المفتاح بعد الاستخدام
-         await supabase
-            .from("available_public_keys")
-            .delete()
-            .eq("public_key", public_key);
-      }
+        // حذف المفتاح بعد الاستخدام
+        await supabase
+           .from("available_public_keys")
+           .delete()
+           .eq("public_key", finalPublicKey);
+     }
 
-      // ✅ توليد public_key و super_code تلقائيًا إن لم يتم تمريرهما
-      if (!finalPublicKey || !finalSuperCode) {
-         // ✅ احصل على أول مفتاح غير مستخدم
-         const { data: keyData } = await supabase
-            .from("available_public_keys")
-            .select("public_key")
-            .eq("used", false)
-            .limit(1)
-            .single();
+     // ✅ إذا لم يتم تمرير public_key → توليد تلقائي
+     if (!finalPublicKey || !finalSuperCode) {
+        const { data: keyData } = await supabase
+           .from("available_public_keys")
+           .select("public_key")
+           .eq("used", false)
+           .is("used_for", null)
+           .limit(1)
+           .maybeSingle();
 
-         if (!keyData) {
-            return res.status(400).json({ error: "No available public keys found" });
-         }
+        if (keyData?.public_key) {
+           finalPublicKey = keyData.public_key;
 
-         finalPublicKey = keyData.public_key;
+           await supabase
+              .from("available_public_keys")
+              .update({ used: true, used_for: "super" })
+              .eq("public_key", finalPublicKey);
+        } else {
+           finalPublicKey = uuidv4();
+        }
 
-         // ✅ حساب الكود التالي
-         const { data: lastSuper } = await supabase
-            .from("supers")
-            .select("super_code")
-            .order("super_code", { ascending: false })
-            .limit(1)
-            .maybeSingle();
+        // توليد super_code تلقائيًا
+        const { data: lastSuper } = await supabase
+           .from("supers")
+           .select("super_code")
+           .order("created_at", { ascending: false })
+           .limit(1)
+           .maybeSingle();
 
-         if (lastSuper?.super_code) {
-            const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
-            let newSuffix = suffix + 1;
-            let newPrefix = prefix;
+        if (lastSuper?.super_code) {
+           const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
+           let newSuffix = suffix + 1;
+           let newPrefix = prefix;
 
-            if (newSuffix > 99) {
-               newSuffix = 1;
-               newPrefix += 1;
-            }
+           if (newSuffix > 99) {
+              newSuffix = 1;
+              newPrefix += 1;
+           }
 
-            finalSuperCode = `${newPrefix}-${String(newSuffix).padStart(2, "0")}`;
-         } else {
-            finalSuperCode = "01-01";
-         }
+           finalSuperCode = `${String(newPrefix).padStart(2, "0")}-${String(newSuffix).padStart(2, "0")}`;
+        } else {
+           finalSuperCode = "01-01";
+        }
+     }
 
-         // ✅ تحديث المفتاح على أنه مستخدم
-         await supabase
-            .from("available_public_keys")
-            .update({ used: true, used_for: "super", code: finalSuperCode })
-            .eq("public_key", finalPublicKey);
-      }
+     // ✅ تحقق من التكرار الأخير قبل الإدراج
+     const { data: already } = await supabase
+        .from("supers")
+        .select("super_id")
+        .or(`super_code.eq.${finalSuperCode},public_key.eq.${finalPublicKey}`)
+        .maybeSingle();
 
-      // ✅ تحقق من عدم التكرار
-      const { data: existing } = await supabase
-         .from("supers")
-         .select("super_id")
-         .or(`super_code.eq.${finalSuperCode},public_key.eq.${finalPublicKey}`)
-         .maybeSingle();
+     if (already) {
+        return res.status(400).json({ error: "Super code or public key already exists" });
+     }
 
-      if (existing) {
-         return res.status(400).json({ error: "Super code or public key already exists" });
-      }
+     // ✅ إدراج العاسلة
+     const { data, error } = await supabase
+        .from("supers")
+        .insert([{
+           super_code: finalSuperCode,
+           super_type,
+           purpose_super,
+           qr_code: qr_code || `https://yourapp.com/super/${finalPublicKey}`,
+           weight_empty,
+           active,
+           service_in,
+           hive_id: hive_id || null,
+           public_key: finalPublicKey
+        }])
+        .select("*")
+        .single();
 
-      const { data, error } = await supabase
-         .from("supers")
-         .insert([
-            {
-               super_code: finalSuperCode,
-               super_type,
-               purpose_super,
-               qr_code,
-               weight_empty,
-               active,
-               service_in,
-               hive_id,
-               public_key: finalPublicKey,
-            },
-         ])
-         .select("*")
-         .single();
+     if (error) throw error;
 
-      if (error) throw error;
+     console.log("✅ Super created:", { super_code: finalSuperCode, public_key: finalPublicKey });
 
-      res.status(201).json(data);
-   } catch (err) {
-      console.error("Error creating super:", err);
-      res.status(500).json({ error: "Unexpected server error" });
-   }
+     res.status(201).json(data);
+  } catch (err) {
+     console.error("❌ Error creating super:", err);
+     res.status(500).json({ error: "Unexpected server error" });
+  }
 });
 
 // ✅ تحديث عاسلة
