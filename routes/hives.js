@@ -9,111 +9,114 @@ const authenticateUser = require("../middlewares/authMiddleware");
 
 // 🐝 إنشاء خلية جديدة
 // 🐝 إنشاء خلية جديدة (يدوي أو بمفتاح QR موجود)
+// 🐝 إنشاء خلية جديدة
 router.post("/", authenticateUser, async (req, res) => {
-   const {
-      hive_type,
-      hive_purpose,
-      empty_weight,
-      frame_capacity,
-      apiary_id,
-      public_key, // إذا أتى من QR code
-   } = req.body;
+  const {
+     hive_type,
+     hive_purpose,
+     empty_weight,
+     frame_capacity,
+     apiary_id,
+     public_key, // إذا أتى من QR code
+  } = req.body;
 
-   if (!apiary_id) {
-      return res.status(400).json({ error: "apiary_id is required." });
-   }
+  if (!apiary_id) {
+     return res.status(400).json({ error: "apiary_id is required." });
+  }
 
-   try {
-      let finalPublicKey = public_key || uuidv4();
-      let finalHiveCode;
+  try {
+     let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
+     let finalHiveCode;
 
-      // ✅ تحقق من تكرار public_key فقط إذا تم تمريره
-      if (public_key) {
-         console.log("🔍 Received public_key:", public_key);
-         const { data: existing, error: checkError } = await supabase
-            .from("hives")
-            .select("hive_id")
-            .eq("public_key", public_key)
-            .maybeSingle();
+     console.log("🔹 Body:", req.body);
+     console.log("🔍 Received public_key:", finalPublicKey);
 
-         if (existing) {
-            console.log("🚫 This public_key is already used in hives table.");
-            return res.status(400).json({ error: "Public key already used" });
-         }
-      }
+     // ✅ تحقق من تكرار public_key فقط إذا تم تمريره
+     if (public_key) {
+        const { data: existing, error: checkError } = await supabase
+           .from("hives")
+           .select("hive_id")
+           .eq("public_key", finalPublicKey)
+           .maybeSingle();
 
-      if (public_key) {
-         const { data: availableKey, error: keyFetchError } = await supabase
-            .from("available_public_keys")
-            .select("hive_code")
-            .eq("public_key", public_key)
-            .single();
+        if (existing) {
+           console.log("🚫 This public_key is already used in hives table.");
+           return res.status(400).json({ error: "Public key already used" });
+        }
+     }
 
-         console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
+     if (public_key) {
+        const { data: availableKey, error: keyFetchError } = await supabase
+           .from("available_public_keys")
+           .select("hive_code")
+           .eq("public_key", finalPublicKey)
+           .single();
 
-         if (!availableKey) {
-            console.log("🚫 Public key not found in available_public_keys table.");
-            return res.status(400).json({ error: "Public key not found in available list" });
-         }
+        console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
 
-         finalHiveCode = availableKey.hive_code;
+        if (!availableKey) {
+           console.log("🚫 Public key not found in available_public_keys table.");
+           return res.status(400).json({ error: "Public key not found in available list" });
+        }
 
-         // ❌ ثم احذف المفتاح من الجدول
-         const { error: deleteError } = await supabase
-            .from("available_public_keys")
-            .delete()
-            .eq("public_key", public_key);
-         if (deleteError) console.error("⚠️ Failed to delete used public_key:", deleteError);
-      } else {
-         // ✅ إنشاء hive_code جديد بناء على آخر كود داخل نفس apiary
-         const { data: lastHives } = await supabase
-            .from("hives")
-            .select("hive_code")
-            .eq("apiary_id", apiary_id)
-            .order("hive_code", { ascending: false })
-            .limit(1);
+        finalHiveCode = availableKey.hive_code;
 
-         const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
-         const [prefix, lastNum] = lastCode.split("-");
-         const nextNum = String(parseInt(lastNum) + 1).padStart(2, "0");
+        // ❌ ثم احذف المفتاح من الجدول
+        const { error: deleteError } = await supabase
+           .from("available_public_keys")
+           .delete()
+           .eq("public_key", finalPublicKey);
+        if (deleteError) console.error("⚠️ Failed to delete used public_key:", deleteError);
+     } else {
+        // ✅ إنشاء hive_code جديد بناء على آخر كود داخل نفس apiary
+        const { data: lastHives } = await supabase
+           .from("hives")
+           .select("hive_code")
+           .eq("apiary_id", apiary_id)
+           .order("hive_code", { ascending: false })
+           .limit(1);
 
-         finalHiveCode = `${prefix}-${nextNum}`;
-      }
+        const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
+        const [prefix, lastNum] = lastCode.split("-");
+        const nextNum = String(parseInt(lastNum) + 1).padStart(2, "0");
 
-      const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
+        finalHiveCode = `${prefix}-${nextNum}`;
+     }
 
-      const { data, error } = await supabase
-         .from("hives")
-         .insert([
-            {
-               hive_code: finalHiveCode,
-               hive_type,
-               hive_purpose,
-               empty_weight,
-               frame_capacity,
-               public_key: finalPublicKey,
-               qr_code: qrCode,
-               apiary_id,
-            },
-         ])
-         .select()
-         .single();
+     const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
 
-      if (error) {
-         console.error("🛑 Error inserting hive:", error);
-         return res.status(400).json({ error: error.message });
-      }
+     const { data, error } = await supabase
+        .from("hives")
+        .insert([
+           {
+              hive_code: finalHiveCode,
+              hive_type,
+              hive_purpose,
+              empty_weight,
+              frame_capacity,
+              public_key: finalPublicKey,
+              qr_code: qrCode,
+              apiary_id,
+           },
+        ])
+        .select()
+        .single();
 
-      console.log("✅ Hive created successfully:", {
-         hive_code: finalHiveCode,
-         public_key: finalPublicKey,
-      });
+     if (error) {
+        console.error("🛑 Error inserting hive:", error);
+        return res.status(400).json({ error: error.message });
+     }
 
-      return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
-   } catch (err) {
-      console.error("❌ Unexpected error in hive creation:", err);
-      return res.status(500).json({ error: "Unexpected server error" });
-   }
+     console.log("✅ Hive created successfully:", {
+        hive_code: finalHiveCode,
+        public_key: finalPublicKey,
+     });
+
+     return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
+  } catch (err) {
+     console.error("❌ Unexpected error in hive creation:", err);
+     return res.status(500).json({ error: "Unexpected server error" });
+  }
 });
 
 // 🖼️ تحميل صورة QR مع كود الخلية واسم الشركة
