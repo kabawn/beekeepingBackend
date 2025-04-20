@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
+const { v4: uuidv4 } = require("uuid");
 
 // ✅ جلب كل العاسلات للمستخدم الحالي
 router.get("/", authenticateUser, async (req, res) => {
