@@ -83,4 +83,31 @@ router.post("/login", async (req, res) => {
    }
 });
 
+// ✅ تحديث الـ access_token باستخدام refresh_token
+router.post("/refresh", async (req, res) => {
+   const { refresh_token } = req.body;
+
+   if (!refresh_token) {
+      return res.status(400).json({ error: "Refresh token is required" });
+   }
+
+   try {
+      const { data: refreshedSession, error: refreshError } = await supabase.auth.refreshSession({ refresh_token });
+
+      if (refreshError) {
+         return res.status(401).json({ error: refreshError.message });
+      }
+
+      return res.status(200).json({
+         access_token: refreshedSession.session.access_token,
+         refresh_token: refreshedSession.session.refresh_token,
+         user: refreshedSession.session.user,
+      });
+   } catch (err) {
+      console.error("Error refreshing token:", err);
+      return res.status(500).json({ error: "Server error" });
+   }
+});
+
+
 module.exports = router;
