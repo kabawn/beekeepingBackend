@@ -29,6 +29,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
       // ✅ تحقق من تكرار public_key فقط إذا تم تمريره
       if (public_key) {
+         console.log("🔍 Received public_key:", public_key);
          const { data: existing, error: checkError } = await supabase
             .from("hives")
             .select("hive_id")
@@ -36,26 +37,33 @@ router.post("/", authenticateUser, async (req, res) => {
             .maybeSingle();
 
          if (existing) {
+            console.log("🚫 This public_key is already used in hives table.");
             return res.status(400).json({ error: "Public key already used" });
          }
       }
 
-      // ✅ إذا public_key موجود مسبقًا، خذ الـ hive_code المرتبط به من available_public_keys
       if (public_key) {
-         const { data: availableKey } = await supabase
+         const { data: availableKey, error: keyFetchError } = await supabase
             .from("available_public_keys")
             .select("hive_code")
             .eq("public_key", public_key)
             .single();
 
+         console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
+
          if (!availableKey) {
+            console.log("🚫 Public key not found in available_public_keys table.");
             return res.status(400).json({ error: "Public key not found in available list" });
          }
 
          finalHiveCode = availableKey.hive_code;
 
          // ❌ ثم احذف المفتاح من الجدول
-         await supabase.from("available_public_keys").delete().eq("public_key", public_key);
+         const { error: deleteError } = await supabase
+            .from("available_public_keys")
+            .delete()
+            .eq("public_key", public_key);
+         if (deleteError) console.error("⚠️ Failed to delete used public_key:", deleteError);
       } else {
          // ✅ إنشاء hive_code جديد بناء على آخر كود داخل نفس apiary
          const { data: lastHives } = await supabase
@@ -92,17 +100,18 @@ router.post("/", authenticateUser, async (req, res) => {
          .single();
 
       if (error) {
+         console.error("🛑 Error inserting hive:", error);
          return res.status(400).json({ error: error.message });
       }
 
-      console.log("✅ Created hive with:", {
+      console.log("✅ Hive created successfully:", {
          hive_code: finalHiveCode,
          public_key: finalPublicKey,
       });
 
       return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
    } catch (err) {
-      console.error("❌ Error creating hive:", err);
+      console.error("❌ Unexpected error in hive creation:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
 });
