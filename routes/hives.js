@@ -36,7 +36,7 @@ router.post("/", authenticateUser, async (req, res) => {
         const { data: existing, error: checkError } = await supabase
            .from("hives")
            .select("hive_id")
-           .eq("public_key", finalPublicKey)
+           .ilike("public_key", finalPublicKey.trim())
            .maybeSingle();
 
         if (existing) {
@@ -49,7 +49,7 @@ router.post("/", authenticateUser, async (req, res) => {
         const { data: availableKey, error: keyFetchError } = await supabase
            .from("available_public_keys")
            .select("hive_code")
-           .eq("public_key", finalPublicKey)
+           .ilike("public_key", finalPublicKey.trim())
            .single();
 
         console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
