@@ -10,11 +10,13 @@ const authenticateUser = require('../middlewares/authMiddleware');
 // 🐝 إنشاء خلية جديدة
 router.post('/', authenticateUser, async (req, res) => {
   const {
+    hive_code,
     hive_type,
     hive_purpose,
     empty_weight,
     frame_capacity,
-    apiary_id
+    apiary_id,
+    public_key,
   } = req.body;
 
   if (!apiary_id) {
@@ -22,25 +24,53 @@ router.post('/', authenticateUser, async (req, res) => {
   }
 
   try {
-    const { data: existingHives } = await supabase
-      .from('hives')
-      .select('hive_id')
-      .eq('apiary_id', apiary_id);
+    // ✅ تحقق من عدم تكرار hive_code أو public_key
+    if (hive_code || public_key) {
+      const { data: existing, error: checkError } = await supabase
+        .from('hives')
+        .select('*')
+        .or(`hive_code.eq.${hive_code},public_key.eq.${public_key}`)
+        .maybeSingle();
 
-    const hiveCount = existingHives?.length || 0;
-    const hiveCode = `${String(apiary_id).padStart(2, '0')}-${String(hiveCount + 1).padStart(2, '0')}`;
-    const publicKey = uuidv4();
-    const qrCode = `https://yourapp.com/hive/${publicKey}`;
+      if (existing) {
+        return res.status(400).json({ error: 'Hive code or public key already exists' });
+      }
+    }
+
+    let finalHiveCode = hive_code;
+    let finalPublicKey = public_key;
+
+    // ✅ إذا لم يتم إرسال public_key → أنشئهم تلقائياً
+    if (!finalPublicKey || !finalHiveCode) {
+      const { data: lastHives } = await supabase
+        .from('hives')
+        .select('hive_code')
+        .eq('apiary_id', apiary_id)
+        .order('hive_code', { ascending: false })
+        .limit(1);
+
+      const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, '0')}-00`;
+      const [prefix, lastNum] = lastCode.split('-');
+      const nextNum = String(parseInt(lastNum) + 1).padStart(2, '0');
+
+      finalHiveCode = `${prefix}-${nextNum}`;
+      finalPublicKey = uuidv4();
+    } else {
+      // ✅ حذف المفتاح من available_public_keys إذا تم استخدامه
+      await supabase.from('available_public_keys').delete().eq('public_key', finalPublicKey);
+    }
+
+    const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
 
     const { data, error } = await supabase
       .from('hives')
       .insert([{
-        hive_code: hiveCode,
+        hive_code: finalHiveCode,
         hive_type,
         hive_purpose,
         empty_weight,
         frame_capacity,
-        public_key: publicKey,
+        public_key: finalPublicKey,
         qr_code: qrCode,
         apiary_id
       }])
@@ -136,6 +166,5 @@ router.get('/:id', authenticateUser, async (req, res) => {
     res.status(500).json({ error: 'Unexpected server error while fetching hive' });
   }
 });
-
 
 module.exports = router;

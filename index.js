@@ -32,6 +32,7 @@ const apiaryNotesRouter = require('./routes/apiaryNotes');
 const queenPedigreeRouter = require('./routes/queenPedigree');
 const queenCharacteristicsRouter = require('./routes/queenCharacteristics');
 const hivesPublicRouter = require("./routes/hivesPublic");
+const availablePublicKeysRoutes = require("./routes/availablePublicKeys");
 
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
@@ -49,6 +50,7 @@ app.use('/api/apiary-notes', apiaryNotesRouter);
 app.use('/api/queen-pedigree', queenPedigreeRouter);
 app.use('/api/queen-characteristics', queenCharacteristicsRouter);
 app.use("/api/hives", hivesPublicRouter);
+app.use("/api/available-keys", availablePublicKeysRoutes);
 
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");
