@@ -52,7 +52,7 @@ router.get("/:id", authenticateUser, async (req, res) => {
    }
 });
 
-// ✅ إنشاء عاسلة جديدة (QR موجود أو جديد تلقائيًا)
+// ✅ إنشاء عاسلة جديدة
 router.post("/", authenticateUser, async (req, res) => {
    const {
       super_code,
@@ -63,43 +63,70 @@ router.post("/", authenticateUser, async (req, res) => {
       active,
       service_in,
       hive_id,
-      public_key, // يمكن إرساله أو تركه فارغًا
+      public_key
    } = req.body;
 
    try {
       let finalPublicKey = public_key;
       let finalSuperCode = super_code;
 
-      // 🟢 إذا لم يُرسل public_key → نحاول نأخذ واحد من available_public_keys
-      if (!finalPublicKey) {
-         const { data: keyData, error: keyError } = await supabase
+      if (public_key) {
+         // ✅ تحقق إذا كان public_key مستخدم مسبقاً
+         const { data: existingSuper } = await supabase
+            .from("supers")
+            .select("super_id")
+            .eq("public_key", public_key)
+            .maybeSingle();
+
+         if (existingSuper) {
+            return res.status(400).json({ error: "Public key already used" });
+         }
+
+         // ✅ جلب super_code من available_public_keys
+         const { data: availableKey } = await supabase
+            .from("available_public_keys")
+            .select("code")
+            .eq("public_key", public_key)
+            .single();
+
+         if (!availableKey) {
+            return res.status(400).json({ error: "Public key not found in available list" });
+         }
+
+         finalSuperCode = availableKey.code;
+
+         // ✅ حذف المفتاح بعد الاستخدام
+         await supabase
+            .from("available_public_keys")
+            .delete()
+            .eq("public_key", public_key);
+      }
+
+      // ✅ توليد public_key و super_code تلقائيًا إن لم يتم تمريرهما
+      if (!finalPublicKey || !finalSuperCode) {
+         // ✅ احصل على أول مفتاح غير مستخدم
+         const { data: keyData } = await supabase
             .from("available_public_keys")
             .select("public_key")
             .eq("used", false)
             .limit(1)
             .single();
 
-         if (keyError || !keyData) {
+         if (!keyData) {
             return res.status(400).json({ error: "No available public keys found" });
          }
 
          finalPublicKey = keyData.public_key;
 
-         // ✅ حدّث المفتاح على أنه مستخدم
-         await supabase
-            .from("available_public_keys")
-            .update({ used: true, used_for: "super" })
-            .eq("public_key", finalPublicKey);
-
-         // ✅ حساب آخر super_code لتوليد الكود التالي
-         const { data: lastSuper, error: codeError } = await supabase
+         // ✅ حساب الكود التالي
+         const { data: lastSuper } = await supabase
             .from("supers")
             .select("super_code")
             .order("super_code", { ascending: false })
             .limit(1)
             .maybeSingle();
 
-         if (!codeError && lastSuper?.super_code) {
+         if (lastSuper?.super_code) {
             const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
             let newSuffix = suffix + 1;
             let newPrefix = prefix;
@@ -111,14 +138,20 @@ router.post("/", authenticateUser, async (req, res) => {
 
             finalSuperCode = `${newPrefix}-${String(newSuffix).padStart(2, "0")}`;
          } else {
-            finalSuperCode = "01-01"; // fallback default
+            finalSuperCode = "01-01";
          }
+
+         // ✅ تحديث المفتاح على أنه مستخدم
+         await supabase
+            .from("available_public_keys")
+            .update({ used: true, used_for: "super", code: finalSuperCode })
+            .eq("public_key", finalPublicKey);
       }
 
-      // ✅ تحقق من عدم وجود تكرار
-      const { data: existing, error: existingError } = await supabase
+      // ✅ تحقق من عدم التكرار
+      const { data: existing } = await supabase
          .from("supers")
-         .select("*")
+         .select("super_id")
          .or(`super_code.eq.${finalSuperCode},public_key.eq.${finalPublicKey}`)
          .maybeSingle();
 
