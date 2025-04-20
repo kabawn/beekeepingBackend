@@ -48,7 +48,7 @@ router.post("/", authenticateUser, async (req, res) => {
      if (public_key) {
         const { data: availableKey, error: keyFetchError } = await supabase
            .from("available_public_keys")
-           .select("hive_code")
+           .select("code")
            .ilike("public_key", finalPublicKey.trim())
            .single();
 
@@ -59,7 +59,7 @@ router.post("/", authenticateUser, async (req, res) => {
            return res.status(400).json({ error: "Public key not found in available list" });
         }
 
-        finalHiveCode = availableKey.hive_code;
+        finalHiveCode = availableKey.code;
 
         // ❌ ثم احذف المفتاح من الجدول
         const { error: deleteError } = await supabase
