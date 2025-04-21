@@ -11,112 +11,112 @@ const authenticateUser = require("../middlewares/authMiddleware");
 // 🐝 إنشاء خلية جديدة (يدوي أو بمفتاح QR موجود)
 // 🐝 إنشاء خلية جديدة
 router.post("/", authenticateUser, async (req, res) => {
-  const {
-     hive_type,
-     hive_purpose,
-     empty_weight,
-     frame_capacity,
-     apiary_id,
-     public_key, // إذا أتى من QR code
-  } = req.body;
+   const {
+      hive_type,
+      hive_purpose,
+      empty_weight,
+      frame_capacity,
+      apiary_id,
+      public_key, // إذا أتى من QR code
+   } = req.body;
 
-  if (!apiary_id) {
-     return res.status(400).json({ error: "apiary_id is required." });
-  }
+   if (!apiary_id) {
+      return res.status(400).json({ error: "apiary_id is required." });
+   }
 
-  try {
-     let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
-     let finalHiveCode;
+   try {
+      let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
+      let finalHiveCode;
 
-     console.log("🔹 Body:", req.body);
-     console.log("🔍 Received public_key:", finalPublicKey);
+      console.log("🔹 Body:", req.body);
+      console.log("🔍 Received public_key:", finalPublicKey);
 
-     // ✅ تحقق من تكرار public_key فقط إذا تم تمريره
-     if (public_key) {
-        const { data: existing, error: checkError } = await supabase
-           .from("hives")
-           .select("hive_id")
-           .ilike("public_key", finalPublicKey.trim())
-           .maybeSingle();
+      // ✅ تحقق من تكرار public_key فقط إذا تم تمريره
+      if (public_key) {
+         const { data: existing, error: checkError } = await supabase
+            .from("hives")
+            .select("hive_id")
+            .ilike("public_key", finalPublicKey.trim())
+            .maybeSingle();
 
-        if (existing) {
-           console.log("🚫 This public_key is already used in hives table.");
-           return res.status(400).json({ error: "Public key already used" });
-        }
-     }
+         if (existing) {
+            console.log("🚫 This public_key is already used in hives table.");
+            return res.status(400).json({ error: "Public key already used" });
+         }
+      }
 
-     if (public_key) {
-        const { data: availableKey, error: keyFetchError } = await supabase
-           .from("available_public_keys")
-           .select("code")
-           .ilike("public_key", finalPublicKey.trim())
-           .single();
+      if (public_key) {
+         const { data: availableKey, error: keyFetchError } = await supabase
+            .from("available_public_keys")
+            .select("code")
+            .ilike("public_key", finalPublicKey.trim())
+            .single();
 
-        console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
+         console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
 
-        if (!availableKey) {
-           console.log("🚫 Public key not found in available_public_keys table.");
-           return res.status(400).json({ error: "Public key not found in available list" });
-        }
+         if (!availableKey) {
+            console.log("🚫 Public key not found in available_public_keys table.");
+            return res.status(400).json({ error: "Public key not found in available list" });
+         }
 
-        finalHiveCode = availableKey.code;
+         finalHiveCode = availableKey.code;
 
-        // ❌ ثم احذف المفتاح من الجدول
-        const { error: deleteError } = await supabase
-           .from("available_public_keys")
-           .delete()
-           .eq("public_key", finalPublicKey);
-        if (deleteError) console.error("⚠️ Failed to delete used public_key:", deleteError);
-     } else {
-        // ✅ إنشاء hive_code جديد بناء على آخر كود داخل نفس apiary
-        const { data: lastHives } = await supabase
-           .from("hives")
-           .select("hive_code")
-           .eq("apiary_id", apiary_id)
-           .order("hive_code", { ascending: false })
-           .limit(1);
+         // ❌ ثم احذف المفتاح من الجدول
+         const { error: deleteError } = await supabase
+            .from("available_public_keys")
+            .delete()
+            .eq("public_key", finalPublicKey);
+         if (deleteError) console.error("⚠️ Failed to delete used public_key:", deleteError);
+      } else {
+         // ✅ إنشاء hive_code جديد بناء على آخر كود داخل نفس apiary
+         const { data: lastHives } = await supabase
+            .from("hives")
+            .select("hive_code")
+            .eq("apiary_id", apiary_id)
+            .order("hive_code", { ascending: false })
+            .limit(1);
 
-        const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
-        const [prefix, lastNum] = lastCode.split("-");
-        const nextNum = String(parseInt(lastNum) + 1).padStart(2, "0");
+         const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
+         const [prefix, lastNum] = lastCode.split("-");
+         const nextNum = String(parseInt(lastNum) + 1).padStart(2, "0");
 
-        finalHiveCode = `${prefix}-${nextNum}`;
-     }
+         finalHiveCode = `${prefix}-${nextNum}`;
+      }
 
-     const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
+      const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
 
-     const { data, error } = await supabase
-        .from("hives")
-        .insert([
-           {
-              hive_code: finalHiveCode,
-              hive_type,
-              hive_purpose,
-              empty_weight,
-              frame_capacity,
-              public_key: finalPublicKey,
-              qr_code: qrCode,
-              apiary_id,
-           },
-        ])
-        .select()
-        .single();
+      const { data, error } = await supabase
+         .from("hives")
+         .insert([
+            {
+               hive_code: finalHiveCode,
+               hive_type,
+               hive_purpose,
+               empty_weight,
+               frame_capacity,
+               public_key: finalPublicKey,
+               qr_code: qrCode,
+               apiary_id,
+            },
+         ])
+         .select()
+         .single();
 
-     if (error) {
-        console.error("🛑 Error inserting hive:", error);
-        return res.status(400).json({ error: error.message });
-     }
+      if (error) {
+         console.error("🛑 Error inserting hive:", error);
+         return res.status(400).json({ error: error.message });
+      }
 
-     console.log("✅ Hive created successfully:", {
-        hive_code: finalHiveCode,
-        public_key: finalPublicKey,
-     });
+      console.log("✅ Hive created successfully:", {
+         hive_code: finalHiveCode,
+         public_key: finalPublicKey,
+      });
 
-     return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
-  } catch (err) {
-     console.error("❌ Unexpected error in hive creation:", err);
-     return res.status(500).json({ error: "Unexpected server error" });
-  }
+      return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
+   } catch (err) {
+      console.error("❌ Unexpected error in hive creation:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
 });
 
 // 🖼️ تحميل صورة QR مع كود الخلية واسم الشركة
@@ -177,27 +177,20 @@ router.get("/qr-download/:public_key", async (req, res) => {
    }
 });
 
-// ✅ جلب العاسلات الخاصة بالمستخدم الحالي
+// ✅ Get all supers belonging to the authenticated user
 router.get("/my", authenticateUser, async (req, res) => {
-  try {
-    const userId = req.user.id;
+   const userId = req.user.id;
 
-    const { data, error } = await supabase
-      .from("supers")
-      .select("*")
-      .eq("owner_user_id", userId)
-      .order("created_at", { ascending: false });
+   try {
+      const { data, error } = await supabase.from("supers").select("*").eq("owner_user_id", userId);
 
-    if (error) {
-      console.error("❌ Supabase error:", error);
-      return res.status(500).json({ error: "Failed to fetch supers for user" });
-    }
+      if (error) throw error;
 
-    res.status(200).json(data);
-  } catch (err) {
-    console.error("❌ Unexpected error in /supers/my:", err);
-    res.status(500).json({ error: "Unexpected server error" });
-  }
+      res.status(200).json(data);
+   } catch (err) {
+      console.error("❌ Error fetching user supers:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
 });
 
 // ✅ جلب خلية حسب ID
