@@ -29,6 +29,11 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
+router.get("/my", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { data, error } = await supabase.from("supers").select("*").eq("owner_user_id", userId);
+});
+
 // ✅ جلب عاسلة حسب ID
 router.get("/:id", authenticateUser, async (req, res) => {
    try {
@@ -221,22 +226,6 @@ router.delete("/:id", authenticateUser, async (req, res) => {
       res.json({ message: "Super deleted successfully", super: data });
    } catch (err) {
       console.error("Error deleting super:", err);
-      res.status(500).json({ error: "Unexpected server error" });
-   }
-});
-
-// ✅ Get all supers belonging to the authenticated user
-router.get("/my", authenticateUser, async (req, res) => {
-   const userId = req.user.id;
-
-   try {
-      const { data, error } = await supabase.from("supers").select("*").eq("owner_user_id", userId);
-
-      if (error) throw error;
-
-      res.status(200).json(data);
-   } catch (err) {
-      console.error("❌ Error fetching user supers:", err);
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
