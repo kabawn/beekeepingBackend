@@ -177,6 +177,29 @@ router.get("/qr-download/:public_key", async (req, res) => {
    }
 });
 
+// ✅ جلب العاسلات الخاصة بالمستخدم الحالي
+router.get("/my", authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from("supers")
+      .select("*")
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("❌ Supabase error:", error);
+      return res.status(500).json({ error: "Failed to fetch supers for user" });
+    }
+
+    res.status(200).json(data);
+  } catch (err) {
+    console.error("❌ Unexpected error in /supers/my:", err);
+    res.status(500).json({ error: "Unexpected server error" });
+  }
+});
+
 // ✅ جلب خلية حسب ID
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
