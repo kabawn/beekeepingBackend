@@ -248,26 +248,113 @@ router.delete("/:id", authenticateUser, async (req, res) => {
    }
 });
 
-// ✅ في routes/supers.js
-router.get("/public/:publicKey", authenticateUser, async (req, res) => {
-  const { publicKey } = req.params;
+// ✅ راوت جلب بيانات العاسلة من public_key + حماية
+router.get("/public/:public_key", authenticateUser, async (req, res) => {
+  const { public_key } = req.params;
+  const user_id = req.user.id;
 
   try {
-    const { data, error } = await supabase
-      .from("supers")
-      .select("*")
-      .eq("public_key", publicKey)
-      .single();
+     // 🧱 جلب بيانات العاسلة
+     const { data: superData, error: superError } = await supabase
+        .from("supers")
+        .select(`
+           super_id,
+           super_code,
+           super_type,
+           purpose_super,
+           weight_empty,
+           active,
+           service_in,
+           hive_id,
+           public_key,
+           created_at
+        `)
+        .eq("public_key", public_key)
+        .single();
 
-    if (error || !data) {
-      return res.status(404).json({ error: "Super not found" });
-    }
+     if (superError || !superData) {
+        return res.status(404).json({ error: "Super not found" });
+     }
 
-    // يمكن هنا أيضًا إرجاع اسم المستخدم أو الشركة إن أردت label مخصص
-    return res.json({ super: data, label: "Super Owner" });
+     // 🐝 جلب بيانات الخلية المرتبطة إذا وجدت
+     if (!superData.hive_id) {
+        return res.status(200).json({
+           super: superData,
+           label: "Super Owner",
+        });
+     }
+
+     const { data: hive } = await supabase
+        .from("hives")
+        .select("apiary_id")
+        .eq("hive_id", superData.hive_id)
+        .single();
+
+     if (!hive?.apiary_id) {
+        return res.status(200).json({
+           super: superData,
+           label: "Super Owner",
+        });
+     }
+
+     // 🌱 جلب بيانات المنحل المرتبط
+     const { data: apiary } = await supabase
+        .from("apiaries")
+        .select("apiary_name, commune, department, company_id, owner_user_id")
+        .eq("apiary_id", hive.apiary_id)
+        .single();
+
+     if (!apiary) {
+        return res.status(404).json({ error: "Apiary not found" });
+     }
+
+     // 🔐 تحقق من الصلاحية
+     let hasAccess = false;
+
+     if (apiary.owner_user_id === user_id) {
+        hasAccess = true;
+     } else if (apiary.company_id) {
+        const { data: userProfile } = await supabase
+           .from("user_profiles")
+           .select("company_id")
+           .eq("user_id", user_id)
+           .single();
+
+        if (userProfile?.company_id === apiary.company_id) {
+           hasAccess = true;
+        }
+     }
+
+     if (!hasAccess) {
+        return res.status(403).json({ error: "Access denied" });
+     }
+
+     // 🎫 إعداد الليبل للعرض
+     let label = "Super Owner";
+
+     if (apiary.company_id) {
+        const { data: company } = await supabase
+           .from("companies")
+           .select("company_name")
+           .eq("company_id", apiary.company_id)
+           .single();
+        label = company?.company_name || label;
+     } else if (apiary.owner_user_id) {
+        const { data: user } = await supabase
+           .from("user_profiles")
+           .select("full_name")
+           .eq("user_id", apiary.owner_user_id)
+           .single();
+        label = user?.full_name || label;
+     }
+
+     return res.json({
+        super: superData,
+        label,
+     });
   } catch (err) {
-    console.error("Error fetching super by public key:", err);
-    res.status(500).json({ error: "Unexpected server error" });
+     console.error("❌ Error fetching super by public key:", err);
+     return res.status(500).json({ error: "Unexpected server error" });
   }
 });
 
