@@ -248,4 +248,27 @@ router.delete("/:id", authenticateUser, async (req, res) => {
    }
 });
 
+// ✅ في routes/supers.js
+router.get("/public/:publicKey", authenticateUser, async (req, res) => {
+  const { publicKey } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("supers")
+      .select("*")
+      .eq("public_key", publicKey)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ error: "Super not found" });
+    }
+
+    // يمكن هنا أيضًا إرجاع اسم المستخدم أو الشركة إن أردت label مخصص
+    return res.json({ super: data, label: "Super Owner" });
+  } catch (err) {
+    console.error("Error fetching super by public key:", err);
+    res.status(500).json({ error: "Unexpected server error" });
+  }
+});
+
 module.exports = router;
