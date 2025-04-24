@@ -248,16 +248,30 @@ router.delete("/:id", authenticateUser, async (req, res) => {
 });
 
 // ✅ راوت جلب بيانات العاسلة من public_key + حماية
-// 📡 راوت جلب بيانات العاسلة عبر public_key
+// ✅ راوت جلب بيانات العاسلة من public_key + حماية
 router.get("/public/:public_key", authenticateUser, async (req, res) => {
    const { public_key } = req.params;
    const user_id = req.user.id;
 
    try {
-      // 🧺 جلب بيانات العاسلة
+      // 🧱 جلب بيانات العاسلة + صاحبها
       const { data: superData, error: superError } = await supabase
          .from("supers")
-         .select("super_id, super_code, super_type, weight_empty, hive_id, public_key, created_at")
+         .select(
+            `
+        super_id,
+        super_code,
+        super_type,
+        purpose_super,
+        weight_empty,
+        active,
+        service_in,
+        hive_id,
+        public_key,
+        created_at,
+        owner_user_id
+      `
+         )
          .eq("public_key", public_key)
          .single();
 
@@ -265,21 +279,45 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
          return res.status(404).json({ error: "Super not found" });
       }
 
-      // 🐝 جلب الخلية المرتبطة بالعاسلة
+      // 🐝 إذا لا توجد خلية مرتبطة → جلب اسم المالك مباشرة
+      if (!superData.hive_id) {
+         let label = "Super Owner";
+
+         if (superData.owner_user_id) {
+            const { data: userProfile } = await supabase
+               .from("user_profiles")
+               .select("full_name")
+               .eq("user_id", superData.owner_user_id)
+               .single();
+
+            if (userProfile?.full_name) {
+               label = userProfile.full_name;
+            }
+         }
+
+         return res.status(200).json({
+            super: superData,
+            label,
+         });
+      }
+
+      // 👉 لو في خلية، نكمل اللوجيك العادي لجلب بيانات apiary
       const { data: hive } = await supabase
          .from("hives")
          .select("apiary_id")
          .eq("hive_id", superData.hive_id)
-         .maybeSingle();
+         .single();
 
       if (!hive?.apiary_id) {
-         return res.status(404).json({ error: "Hive or apiary not found" });
+         return res.status(200).json({
+            super: superData,
+            label: "Super Owner",
+         });
       }
 
-      // 🌿 جلب بيانات المنحل
       const { data: apiary } = await supabase
          .from("apiaries")
-         .select("owner_user_id, company_id")
+         .select("apiary_name, commune, department, company_id, owner_user_id")
          .eq("apiary_id", hive.apiary_id)
          .single();
 
@@ -287,19 +325,19 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
          return res.status(404).json({ error: "Apiary not found" });
       }
 
-      // 🔐 تحقق من صلاحية المستخدم
+      // 🔐 التحقق من الوصول
       let hasAccess = false;
 
       if (apiary.owner_user_id === user_id) {
          hasAccess = true;
       } else if (apiary.company_id) {
-         const { data: profile } = await supabase
+         const { data: userProfile } = await supabase
             .from("user_profiles")
             .select("company_id")
             .eq("user_id", user_id)
             .single();
 
-         if (profile?.company_id === apiary.company_id) {
+         if (userProfile?.company_id === apiary.company_id) {
             hasAccess = true;
          }
       }
@@ -308,7 +346,7 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
          return res.status(403).json({ error: "Access denied" });
       }
 
-      // 🏷️ إعداد اسم العرض
+      // 🎫 إعداد الليبل بناءً على الشركة أو الشخص
       let label = "Super Owner";
 
       if (apiary.company_id) {
@@ -329,17 +367,14 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
          label = user?.full_name || label;
       }
 
-      // ✅ إرجاع البيانات
       return res.json({
          super: superData,
          label,
       });
-
    } catch (err) {
-      console.error("❌ Error fetching super public data:", err);
+      console.error("❌ Error fetching super by public key:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
 });
-
 
 module.exports = router;
