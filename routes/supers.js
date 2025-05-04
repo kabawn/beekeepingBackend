@@ -420,4 +420,26 @@ router.post("/link", authenticateUser, async (req, res) => {
 });
 
 
+// ✅ Get all supers linked to a specific hive
+router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
+   const { hive_id } = req.params;
+
+   try {
+      const { data, error } = await supabase
+         .from("supers")
+         .select("*")
+         .eq("hive_id", hive_id)
+         .eq("active", true);
+
+      if (error) throw error;
+
+      res.status(200).json(data);
+   } catch (err) {
+      console.error("❌ Error fetching supers for hive:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+
+
 module.exports = router;
