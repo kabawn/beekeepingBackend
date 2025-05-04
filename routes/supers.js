@@ -414,6 +414,7 @@ router.post("/link", authenticateUser, async (req, res) => {
          return res.status(409).json({
             error: "Super already linked to another hive",
             linkedHive: linkedHive || { hive_id: superData.hive_id },
+            super: superData, // ✅ This is essential
          });
       }
 
