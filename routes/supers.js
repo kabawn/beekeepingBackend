@@ -377,7 +377,6 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
    }
 });
 
-
 // 🔗 Link a super to a hive by code or QR
 router.post("/link", authenticateUser, async (req, res) => {
    const { super_code, public_key, hive_id } = req.body;
@@ -387,7 +386,8 @@ router.post("/link", authenticateUser, async (req, res) => {
    }
 
    try {
-      let query = supabase.from("supers").select("*").eq("active", true).is("hive_id", null).single();
+      // Allow linking whether hive_id is null or not, but still check for duplicates
+      let query = supabase.from("supers").select("*").eq("active", true).single();
 
       if (super_code) {
          query = query.eq("super_code", super_code);
@@ -400,9 +400,24 @@ router.post("/link", authenticateUser, async (req, res) => {
       const { data: superData, error } = await query;
 
       if (error || !superData) {
-         return res.status(404).json({ error: "Super not found or already linked" });
+         return res.status(404).json({ error: "Super not found" });
       }
 
+      // ⛔ Already linked? Return info about the existing hive
+      if (superData.hive_id && superData.hive_id !== hive_id) {
+         const { data: linkedHive, error: hiveError } = await supabase
+            .from("hives")
+            .select("hive_id, hive_code, hive_type, apiary_id")
+            .eq("hive_id", superData.hive_id)
+            .maybeSingle();
+
+         return res.status(409).json({
+            error: "Super already linked to another hive",
+            linkedHive: linkedHive || { hive_id: superData.hive_id },
+         });
+      }
+
+      // ✅ Proceed to link
       const { data, error: updateError } = await supabase
          .from("supers")
          .update({ hive_id })
@@ -418,7 +433,6 @@ router.post("/link", authenticateUser, async (req, res) => {
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
-
 
 // ✅ Get all supers linked to a specific hive
 router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
@@ -460,7 +474,5 @@ router.patch("/:id/unlink", authenticateUser, async (req, res) => {
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
-
-
 
 module.exports = router;
