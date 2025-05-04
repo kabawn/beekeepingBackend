@@ -440,6 +440,27 @@ router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
    }
 });
 
+// ✅ Unlink a super from its hive
+router.patch("/:id/unlink", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+
+   try {
+      const { data, error } = await supabase
+         .from("supers")
+         .update({ hive_id: null })
+         .eq("super_id", id)
+         .select("*")
+         .single();
+
+      if (error) throw error;
+
+      res.status(200).json({ message: "Super unlinked successfully", super: data });
+   } catch (err) {
+      console.error("❌ Error unlinking super:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 
 
 module.exports = router;
