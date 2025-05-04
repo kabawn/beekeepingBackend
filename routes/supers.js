@@ -377,4 +377,47 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
    }
 });
 
+
+// 🔗 Link a super to a hive by code or QR
+router.post("/link", authenticateUser, async (req, res) => {
+   const { super_code, public_key, hive_id } = req.body;
+
+   if (!hive_id) {
+      return res.status(400).json({ error: "Hive ID is required" });
+   }
+
+   try {
+      let query = supabase.from("supers").select("*").eq("active", true).is("hive_id", null).single();
+
+      if (super_code) {
+         query = query.eq("super_code", super_code);
+      } else if (public_key) {
+         query = query.eq("public_key", public_key);
+      } else {
+         return res.status(400).json({ error: "Super code or public key is required" });
+      }
+
+      const { data: superData, error } = await query;
+
+      if (error || !superData) {
+         return res.status(404).json({ error: "Super not found or already linked" });
+      }
+
+      const { data, error: updateError } = await supabase
+         .from("supers")
+         .update({ hive_id })
+         .eq("super_id", superData.super_id)
+         .select("*")
+         .single();
+
+      if (updateError) throw updateError;
+
+      res.status(200).json({ message: "Super linked successfully", super: data });
+   } catch (err) {
+      console.error("❌ Error linking super:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+
 module.exports = router;
