@@ -93,9 +93,15 @@ router.get('/hive/:hive_id', authenticateUser, async (req, res) => {
 
 
 // 🔔 تنبيهات حسب الفلتر (today, overdue, upcoming, all) + بيانات الخلية والمنحل
+// 🔔 GET /inspections/alerts/revisits?filter=today|overdue|upcoming
 router.get('/alerts/revisits', authenticateUser, async (req, res) => {
-  const filter = req.query.filter || 'today';
-  const today = new Date().toISOString().split('T')[0];
+  const filter = req.query.filter || 'upcoming'; // default to upcoming
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+
+  const upcomingLimit = new Date(today);
+  upcomingLimit.setDate(today.getDate() + 3); // next 3 days
+  const upcomingLimitStr = upcomingLimit.toISOString().split('T')[0];
 
   try {
     let query = supabase
@@ -105,29 +111,23 @@ router.get('/alerts/revisits', authenticateUser, async (req, res) => {
         hive_id,
         revisit_date,
         revisit_needed,
-        hives(
-          hive_code,
-          apiary_id,
-          apiaries(apiary_name, commune, department)
-        )
+        hives(hive_code)
       `)
       .eq('revisit_needed', true);
 
     if (filter === 'today') {
-      query = query.eq('revisit_date', today);
+      query = query.eq('revisit_date', todayStr);
     } else if (filter === 'overdue') {
-      query = query.lt('revisit_date', today);
+      query = query.lt('revisit_date', todayStr);
     } else if (filter === 'upcoming') {
-      query = query.gt('revisit_date', today);
+      query = query.gte('revisit_date', todayStr).lte('revisit_date', upcomingLimitStr);
     }
 
     query = query.order('revisit_date', { ascending: true });
 
     const { data, error } = await query;
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
+    if (error) return res.status(400).json({ error: error.message });
 
     res.status(200).json({ alerts: data });
   } catch (err) {
