@@ -57,13 +57,17 @@ router.post('/', authenticateUser, async (req, res) => {
 });
 
 // 📥 جلب كل الفحوصات لخلية معينة
+// 📥 جلب كل الفحوصات لخلية معينة
 router.get('/hive/:hive_id', authenticateUser, async (req, res) => {
   const { hive_id } = req.params;
 
   try {
-    const { data, error } = await supabase
+    const { data: inspections, error } = await supabase
       .from('hive_inspections')
-      .select('*')
+      .select(`
+         *,
+         hives(frame_capacity)
+      `)
       .eq('hive_id', hive_id)
       .order('inspection_date', { ascending: false });
 
@@ -71,12 +75,22 @@ router.get('/hive/:hive_id', authenticateUser, async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
-    res.status(200).json({ inspections: data });
+    // 🧮 Calculate missing frames
+    const result = inspections.map((insp) => ({
+      ...insp,
+      missing_frames:
+        insp.hives?.frame_capacity != null && insp.frame_count != null
+          ? insp.hives.frame_capacity - insp.frame_count
+          : null,
+    }));
+
+    res.status(200).json({ inspections: result });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Unexpected server error' });
   }
 });
+
 
 // 🔔 تنبيهات حسب الفلتر (today, overdue, upcoming, all) + بيانات الخلية والمنحل
 router.get('/alerts/revisits', authenticateUser, async (req, res) => {
