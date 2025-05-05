@@ -122,4 +122,26 @@ router.get('/alerts/revisits', authenticateUser, async (req, res) => {
   }
 });
 
+// 🗑️ حذف فحص بناءً على المعرف
+router.delete('/:id', authenticateUser, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { error } = await supabase
+      .from('hive_inspections')
+      .delete()
+      .eq('inspection_id', id)
+      .eq('user_id', req.user.id); // Optional: ensure only the owner can delete
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(200).json({ message: '🗑️ Inspection deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
 module.exports = router;
