@@ -197,4 +197,36 @@ router.get("/:id", authenticateUser, async (req, res) => {
    }
 });
 
+// 🔍 Get apiary name by hive_id
+router.get("/:id/apiary-name", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+ 
+   try {
+     const { data: hive, error: hiveError } = await supabase
+       .from("hives")
+       .select("apiary_id")
+       .eq("hive_id", id)
+       .single();
+ 
+     if (hiveError || !hive) {
+       return res.status(404).json({ error: "Hive not found" });
+     }
+ 
+     const { data: apiary, error: apiaryError } = await supabase
+       .from("apiaries")
+       .select("apiary_name")
+       .eq("apiary_id", hive.apiary_id)
+       .single();
+ 
+     if (apiaryError || !apiary) {
+       return res.status(404).json({ error: "Apiary not found" });
+     }
+ 
+     res.status(200).json({ apiary_name: apiary.apiary_name });
+   } catch (err) {
+     console.error("Error fetching apiary name:", err);
+     res.status(500).json({ error: "Unexpected server error" });
+   }
+ });
+
 module.exports = router;
