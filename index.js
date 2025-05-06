@@ -33,6 +33,11 @@ const queenPedigreeRouter = require('./routes/queenPedigree');
 const queenCharacteristicsRouter = require('./routes/queenCharacteristics');
 const hivesPublicRouter = require("./routes/hivesPublic");
 const availablePublicKeysRoutes = require("./routes/availablePublicKeys");
+const notationConfigRouter = require('./routes/notationConfig');
+const colonyNotationsRouter = require('./routes/colonyNotations');
+
+
+
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
 app.use("/api/hives", hivesRouter);
@@ -50,6 +55,9 @@ app.use('/api/queen-pedigree', queenPedigreeRouter);
 app.use('/api/queen-characteristics', queenCharacteristicsRouter);
 app.use("/api/hives", hivesPublicRouter);
 app.use("/api/available-keys", availablePublicKeysRoutes);
+app.use('/api/notation-config', notationConfigRouter);
+app.use('/api/colony-notations', colonyNotationsRouter);
+
 
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");
