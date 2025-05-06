@@ -86,4 +86,24 @@ router.get('/alerts/revisits', authenticateUser, async (req, res) => {
   }
 });
 
+// 🗑️ حذف ملاحظة
+router.delete('/:note_id', authenticateUser, async (req, res) => {
+  const { note_id } = req.params;
+
+  try {
+    const { error } = await supabase
+      .from('apiary_notes')
+      .delete()
+      .eq('note_id', note_id);
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.status(200).json({ message: '🗑️ Note deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
+
 module.exports = router;
