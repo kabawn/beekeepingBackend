@@ -95,12 +95,12 @@ router.get('/hive/:hive_id', authenticateUser, async (req, res) => {
 // 🔔 تنبيهات حسب الفلتر (today, overdue, upcoming, all) + بيانات الخلية والمنحل
 // 🔔 GET /inspections/alerts/revisits?filter=today|overdue|upcoming
 router.get('/alerts/revisits', authenticateUser, async (req, res) => {
-  const filter = req.query.filter || 'upcoming'; // default to upcoming
+  const filter = req.query.filter || 'upcoming';
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
 
   const upcomingLimit = new Date(today);
-  upcomingLimit.setDate(today.getDate() + 3); // next 3 days
+  upcomingLimit.setDate(today.getDate() + 3);
   const upcomingLimitStr = upcomingLimit.toISOString().split('T')[0];
 
   try {
@@ -111,7 +111,10 @@ router.get('/alerts/revisits', authenticateUser, async (req, res) => {
         hive_id,
         revisit_date,
         revisit_needed,
-        hives(hive_code)
+        hives(
+          hive_code,
+          apiary(name)
+        )
       `)
       .eq('revisit_needed', true);
 
