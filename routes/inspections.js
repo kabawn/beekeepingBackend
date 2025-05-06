@@ -111,9 +111,11 @@ router.get('/alerts/revisits', authenticateUser, async (req, res) => {
         hive_id,
         revisit_date,
         revisit_needed,
-        hives(
+        hives (
           hive_code,
-          apiary(name)
+          apiary:apiaries (
+            name
+          )
         )
       `)
       .eq('revisit_needed', true);
