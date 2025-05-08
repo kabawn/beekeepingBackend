@@ -103,6 +103,29 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
+// 🔍 جلب ملكة واحدة بالتفصيل
+router.get("/:queen_id", authenticateUser, async (req, res) => {
+  const { queen_id } = req.params;
+
+  try {
+     const { data, error } = await supabase
+        .from("queens")
+        .select("*")
+        .eq("queen_id", queen_id)
+        .single(); // Ensure it returns one row or 404
+
+     if (error || !data) {
+        return res.status(404).json({ error: "Queen not found" });
+     }
+
+     return res.status(200).json({ queen: data });
+  } catch (err) {
+     console.error("Error fetching queen by ID:", err);
+     return res.status(500).json({ error: "Unexpected server error" });
+  }
+});
+
+
 // ✏️ تحديث ملكة (ربطها بخلية أو تعديل بيانات)
 router.patch("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
