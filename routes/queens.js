@@ -14,10 +14,46 @@ router.post('/', authenticateUser, async (req, res) => {
     strain_name,
     opalite_color,
     expected_traits,
-    hive_id
+    hive_id,
+    forceReplace = false,
   } = req.body;
 
   try {
+    let existingQueenId = null;
+
+    if (hive_id) {
+      const { data: existingQueen, error: checkError } = await supabase
+        .from('queens')
+        .select('queen_id')
+        .eq('hive_id', hive_id)
+        .maybeSingle();
+
+      if (checkError) {
+        console.error("Error checking existing queen:", checkError);
+        return res.status(500).json({ error: "Failed to check hive queen status" });
+      }
+
+      if (existingQueen) {
+        if (!forceReplace) {
+          return res.status(400).json({ error: "This hive already has a queen linked." });
+        } else {
+          // ✅ Unlink the old queen (keep it in DB, but set hive_id to null)
+          const { error: unlinkError } = await supabase
+            .from('queens')
+            .update({ hive_id: null })
+            .eq('queen_id', existingQueen.queen_id);
+
+          if (unlinkError) {
+            console.error("Error unlinking old queen:", unlinkError);
+            return res.status(500).json({ error: "Failed to replace existing queen." });
+          }
+
+          existingQueenId = existingQueen.queen_id;
+        }
+      }
+    }
+
+    // 👑 Generate queen code
     const { data: queens, error: countError } = await supabase
       .from('queens')
       .select('queen_id');
@@ -35,18 +71,25 @@ router.post('/', authenticateUser, async (req, res) => {
         strain_name,
         opalite_color,
         expected_traits,
-        hive_id
+        hive_id,
       }])
       .select();
 
     if (error) return res.status(400).json({ error: error.message });
 
-    res.status(201).json({ message: '✅ Queen created successfully', queen: data[0] });
+    return res.status(201).json({
+      message: existingQueenId
+        ? "✅ Replaced old queen and linked new one"
+        : "✅ Queen created successfully",
+      queen: data[0],
+    });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Unexpected server error' });
+    console.error("Unexpected error in POST /queens:", err);
+    res.status(500).json({ error: "Unexpected server error" });
   }
 });
+
 
 // 📋 عرض جميع الملكات
 router.get('/', authenticateUser, async (req, res) => {
