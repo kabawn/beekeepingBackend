@@ -87,65 +87,6 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-// 📋 عرض جميع الملكات
-router.get("/", authenticateUser, async (req, res) => {
-   try {
-      const { data, error } = await supabase
-         .from("queens")
-         .select("*")
-         .order("created_at", { ascending: false });
-
-      if (error) return res.status(400).json({ error: error.message });
-      res.status(200).json({ queens: data });
-   } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Unexpected server error" });
-   }
-});
-
-// 🔍 جلب ملكة واحدة بالتفصيل
-router.get("/:queen_id", authenticateUser, async (req, res) => {
-  const { queen_id } = req.params;
-
-  try {
-     const { data, error } = await supabase
-        .from("queens")
-        .select("*")
-        .eq("queen_id", queen_id)
-        .single(); // Ensure it returns one row or 404
-
-     if (error || !data) {
-        return res.status(404).json({ error: "Queen not found" });
-     }
-
-     return res.status(200).json({ queen: data });
-  } catch (err) {
-     console.error("Error fetching queen by ID:", err);
-     return res.status(500).json({ error: "Unexpected server error" });
-  }
-});
-
-
-// ✏️ تحديث ملكة (ربطها بخلية أو تعديل بيانات)
-router.patch("/:queen_id", authenticateUser, async (req, res) => {
-   const { queen_id } = req.params;
-   const updateFields = req.body;
-
-   try {
-      const { data, error } = await supabase
-         .from("queens")
-         .update(updateFields)
-         .eq("queen_id", queen_id)
-         .select();
-
-      if (error) return res.status(400).json({ error: error.message });
-      res.status(200).json({ message: "✅ Queen updated successfully", queen: data[0] });
-   } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Unexpected server error" });
-   }
-});
-
 // 🖼️ تحميل صورة QR لملكة
 router.get("/qr-download/:public_key", async (req, res) => {
    const { public_key } = req.params;
@@ -186,6 +127,84 @@ router.get("/qr-download/:public_key", async (req, res) => {
    } catch (err) {
       console.error(err);
       res.status(500).json({ error: "❌ Failed to generate QR image" });
+   }
+});
+
+// 📋 عرض جميع الملكات
+router.get("/", authenticateUser, async (req, res) => {
+   try {
+      const { data, error } = await supabase
+         .from("queens")
+         .select("*")
+         .order("created_at", { ascending: false });
+
+      if (error) return res.status(400).json({ error: error.message });
+      res.status(200).json({ queens: data });
+   } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+// 🔍 جلب ملكة واحدة بالتفصيل
+router.get("/:queen_id", authenticateUser, async (req, res) => {
+   const { queen_id } = req.params;
+
+   try {
+      const { data, error } = await supabase
+         .from("queens")
+         .select("*")
+         .eq("queen_id", queen_id)
+         .single(); // Ensure it returns one row or 404
+
+      if (error || !data) {
+         return res.status(404).json({ error: "Queen not found" });
+      }
+
+      return res.status(200).json({ queen: data });
+   } catch (err) {
+      console.error("Error fetching queen by ID:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+// ✏️ تحديث ملكة (ربطها بخلية أو تعديل بيانات)
+// ✏️ تحديث ملكة
+router.patch("/:queen_id", authenticateUser, async (req, res) => {
+   const { queen_id } = req.params;
+   const updateFields = req.body;
+
+   try {
+      const { data, error } = await supabase
+         .from("queens")
+         .update(updateFields)
+         .eq("queen_id", queen_id)
+         .select();
+
+      if (error) return res.status(400).json({ error: error.message });
+      res.status(200).json({ message: "✅ Queen updated successfully", queen: data[0] });
+   } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+// ❌ حذف ملكة
+router.delete("/:queen_id", authenticateUser, async (req, res) => {
+   const { queen_id } = req.params;
+
+   try {
+      const { error } = await supabase.from("queens").delete().eq("queen_id", queen_id);
+
+      if (error) {
+         console.error("Error deleting queen:", error);
+         return res.status(400).json({ error: "Failed to delete queen" });
+      }
+
+      res.status(200).json({ message: "✅ Queen deleted successfully" });
+   } catch (err) {
+      console.error("Unexpected error deleting queen:", err);
+      res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
