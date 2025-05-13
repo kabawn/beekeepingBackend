@@ -79,4 +79,28 @@ router.patch('/:pedigree_id', authenticateUser, async (req, res) => {
   }
 });
 
+
+// ❌ حذف سجل نسب
+router.delete('/:pedigree_id', authenticateUser, async (req, res) => {
+  const { pedigree_id } = req.params;
+
+  try {
+    const { error } = await supabase
+      .from('queen_pedigree')
+      .delete()
+      .eq('pedigree_id', pedigree_id);
+
+    if (error) {
+      console.error('Error deleting pedigree:', error);
+      return res.status(400).json({ error: 'Failed to delete pedigree record' });
+    }
+
+    res.status(200).json({ message: '✅ Pedigree record deleted successfully' });
+  } catch (err) {
+    console.error('Unexpected error deleting pedigree:', err);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
+
 module.exports = router;

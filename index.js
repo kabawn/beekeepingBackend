@@ -49,11 +49,11 @@ app.use("/api/inspections", inspectionsRoutes);
 app.use("/api/auth", authRoutes);
 app.use('/api/companies', companiesRouter);
 app.use('/api/invitations', invitationsRoutes);
-app.use('/api/hives', hivesQrPdfRouter);
+app.use("/api/hives/pdf", hivesQrPdfRouter); // change prefix
 app.use('/api/apiary-notes', apiaryNotesRouter);
 app.use('/api/queen-pedigree', queenPedigreeRouter);
 app.use('/api/queen-characteristics', queenCharacteristicsRouter);
-app.use("/api/hives", hivesPublicRouter);
+app.use("/api/hives/public", hivesPublicRouter); // change prefix
 app.use("/api/available-keys", availablePublicKeysRoutes);
 app.use('/api/notation-config', notationConfigRouter);
 app.use('/api/colony-notations', colonyNotationsRouter);
