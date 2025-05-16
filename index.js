@@ -35,6 +35,7 @@ const hivesPublicRouter = require("./routes/hivesPublic");
 const availablePublicKeysRoutes = require("./routes/availablePublicKeys");
 const notationConfigRouter = require('./routes/notationConfig');
 const colonyNotationsRouter = require('./routes/colonyNotations');
+const infoQueenRouter = require('./routes/infoQueen');
 
 
 
@@ -57,6 +58,7 @@ app.use("/api/hives/public", hivesPublicRouter); // change prefix
 app.use("/api/available-keys", availablePublicKeysRoutes);
 app.use('/api/notation-config', notationConfigRouter);
 app.use('/api/colony-notations', colonyNotationsRouter);
+app.use('/api/info-queen', infoQueenRouter);
 
 
 app.get("/", (req, res) => {
