@@ -64,37 +64,40 @@ router.get("/:id", authenticateUser, async (req, res) => {
 
 // ✅ Get super by super_code
 // ✅ Get super by super_code, for authenticated user only
+// ✅ Get super by super_code (for authenticated user only)
 router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
    const { super_code } = req.params;
    const userId = req.user.id;
 
-   console.log("🧪 Incoming code:", super_code);
-   console.log("🧪 User ID:", userId);
-
    try {
       const { data, error } = await supabase
          .from("supers")
-         .select("super_id AS id, super_code, public_key, owner_user_id") // <– include owner for debug
+         .select("super_id, super_code, public_key, owner_user_id")
          .eq("super_code", super_code.trim())
          .eq("owner_user_id", userId)
          .maybeSingle();
 
+      console.log("🧪 Incoming code:", super_code);
+      console.log("🧪 User ID:", userId);
       console.log("🧪 Supabase result:", data);
+      console.log("🧪 Supabase error:", error);
 
-      if (error) {
-         console.error("🧪 Supabase error:", error);
-      }
-
-      if (!data) {
+      if (error || !data) {
          return res.status(404).json({ error: "Super not found or not owned by user" });
       }
 
-      res.json(data);
+      // ✅ Return normalized object
+      res.json({
+         id: data.super_id,
+         super_code: data.super_code,
+         public_key: data.public_key,
+      });
    } catch (err) {
       console.error("❌ Error fetching super by code:", err);
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
+
 
 // ✅ إنشاء عاسلة جديدة
 router.post("/", authenticateUser, async (req, res) => {
