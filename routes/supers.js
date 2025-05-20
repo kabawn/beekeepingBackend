@@ -68,15 +68,24 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
    const { super_code } = req.params;
    const userId = req.user.id;
 
+   console.log("🧪 Incoming code:", super_code);
+   console.log("🧪 User ID:", userId);
+
    try {
       const { data, error } = await supabase
          .from("supers")
-         .select("super_id AS id, super_code, public_key")
+         .select("super_id AS id, super_code, public_key, owner_user_id") // <– include owner for debug
          .eq("super_code", super_code.trim())
-         .eq("owner_user_id", userId) // 🔐 enforce ownership
+         .eq("owner_user_id", userId)
          .maybeSingle();
 
-      if (error || !data) {
+      console.log("🧪 Supabase result:", data);
+
+      if (error) {
+         console.error("🧪 Supabase error:", error);
+      }
+
+      if (!data) {
          return res.status(404).json({ error: "Super not found or not owned by user" });
       }
 
@@ -86,7 +95,6 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
-
 
 // ✅ إنشاء عاسلة جديدة
 router.post("/", authenticateUser, async (req, res) => {
