@@ -31,4 +31,27 @@ router.get('/', async (req, res) => {
   }
 });
 
+
+// Get super details by public_key (used after scanning QR)
+router.get('/super-by-key/:public_key', async (req, res) => {
+  const { public_key } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT super_id AS id, super_code, public_key FROM supers WHERE public_key = $1`,
+      [public_key.trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Super not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error("Error fetching super by key:", error);
+    res.status(500).json({ error: "Server error while fetching super by key" });
+  }
+});
+
+
 module.exports = router;
