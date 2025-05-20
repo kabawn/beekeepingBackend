@@ -62,6 +62,30 @@ router.get("/:id", authenticateUser, async (req, res) => {
    }
 });
 
+// ✅ Get super by super_code
+router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
+   const { super_code } = req.params;
+   const userId = req.user.id;
+
+   try {
+      const { data, error } = await supabase
+         .from("supers")
+         .select("super_id AS id, super_code, public_key")
+         .eq("super_code", super_code.trim())
+         .eq("owner_user_id", userId)
+         .maybeSingle();
+
+      if (error || !data) {
+         return res.status(404).json({ error: "Super not found" });
+      }
+
+      res.json(data);
+   } catch (err) {
+      console.error("❌ Error fetching super by code:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 // ✅ إنشاء عاسلة جديدة
 router.post("/", authenticateUser, async (req, res) => {
    const {
