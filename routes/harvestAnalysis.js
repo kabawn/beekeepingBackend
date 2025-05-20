@@ -2,6 +2,7 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
+const authenticateUser = require("../middlewares/authMiddleware");
 
 // GET harvest analysis by hive
 // GET harvest analysis by hive (restricted to authenticated user)
