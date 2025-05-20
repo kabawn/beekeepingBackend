@@ -63,6 +63,7 @@ router.get("/:id", authenticateUser, async (req, res) => {
 });
 
 // ✅ Get super by super_code
+// ✅ Get super by super_code, for authenticated user only
 router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
    const { super_code } = req.params;
    const userId = req.user.id;
@@ -72,11 +73,11 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
          .from("supers")
          .select("super_id AS id, super_code, public_key")
          .eq("super_code", super_code.trim())
-         .eq("owner_user_id", userId)
+         .eq("owner_user_id", userId) // 🔐 enforce ownership
          .maybeSingle();
 
       if (error || !data) {
-         return res.status(404).json({ error: "Super not found" });
+         return res.status(404).json({ error: "Super not found or not owned by user" });
       }
 
       res.json(data);
@@ -85,6 +86,7 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
+
 
 // ✅ إنشاء عاسلة جديدة
 router.post("/", authenticateUser, async (req, res) => {
