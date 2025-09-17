@@ -7,271 +7,249 @@ const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
+// 🐝 إنشاء خلية جديدة
 // 🐝 إنشاء خلية جديدة (يدوي أو بمفتاح QR موجود)
+// 🐝 إنشاء خلية جديدة
 router.post("/", authenticateUser, async (req, res) => {
-  const {
-    hive_type,
-    hive_purpose,
-    empty_weight,
-    frame_capacity,
-    apiary_id,
-    public_key, // optional (QR)
-  } = req.body;
+   const {
+      hive_type,
+      hive_purpose,
+      empty_weight,
+      frame_capacity,
+      apiary_id,
+      public_key, // إذا أتى من QR code
+   } = req.body;
 
-  if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
+   if (!apiary_id) {
+      return res.status(400).json({ error: "apiary_id is required." });
+   }
 
-  try {
-    let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
-    let finalHiveCode;
+   try {
+      let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
+      let finalHiveCode;
 
-    // If public_key provided → ensure not already used
-    if (public_key) {
-      const { data: existing } = await supabase
-        .from("hives")
-        .select("hive_id")
-        .ilike("public_key", finalPublicKey.trim())
-        .maybeSingle();
-      if (existing) return res.status(400).json({ error: "Public key already used" });
+      console.log("🔹 Body:", req.body);
+      console.log("🔍 Received public_key:", finalPublicKey);
 
-      // fetch code from available_public_keys
-      const { data: availableKey } = await supabase
-        .from("available_public_keys")
-        .select("code")
-        .ilike("public_key", finalPublicKey.trim())
-        .single();
+      // ✅ تحقق من تكرار public_key فقط إذا تم تمريره
+      if (public_key) {
+         const { data: existing, error: checkError } = await supabase
+            .from("hives")
+            .select("hive_id")
+            .ilike("public_key", finalPublicKey.trim())
+            .maybeSingle();
 
-      if (!availableKey) {
-        return res.status(400).json({ error: "Public key not found in available list" });
+         if (existing) {
+            console.log("🚫 This public_key is already used in hives table.");
+            return res.status(400).json({ error: "Public key already used" });
+         }
       }
-      finalHiveCode = availableKey.code;
 
-      // delete used key
-      await supabase.from("available_public_keys").delete().eq("public_key", finalPublicKey);
-    } else {
-      // generate next hive_code in apiary
-      const { data: lastHives } = await supabase
-        .from("hives")
-        .select("hive_code")
-        .eq("apiary_id", apiary_id)
-        .order("hive_code", { ascending: false })
-        .limit(1);
+      if (public_key) {
+         const { data: availableKey, error: keyFetchError } = await supabase
+            .from("available_public_keys")
+            .select("code")
+            .ilike("public_key", finalPublicKey.trim())
+            .single();
 
-      const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
-      const [prefix, lastNum] = lastCode.split("-");
-      const nextNum = String(parseInt(lastNum, 10) + 1).padStart(2, "0");
-      finalHiveCode = `${prefix}-${nextNum}`;
-    }
+         console.log("🧩 Fetched availableKey from available_public_keys:", availableKey);
 
-    const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
+         if (!availableKey) {
+            console.log("🚫 Public key not found in available_public_keys table.");
+            return res.status(400).json({ error: "Public key not found in available list" });
+         }
 
-    const { data, error } = await supabase
-      .from("hives")
-      .insert([
-        {
-          hive_code: finalHiveCode,
-          hive_type,
-          hive_purpose,
-          empty_weight,
-          frame_capacity,
-          public_key: finalPublicKey,
-          qr_code: qrCode,
-          apiary_id,
-        },
-      ])
-      .select()
-      .single();
+         finalHiveCode = availableKey.code;
 
-    if (error) return res.status(400).json({ error: error.message });
+         // ❌ ثم احذف المفتاح من الجدول
+         const { error: deleteError } = await supabase
+            .from("available_public_keys")
+            .delete()
+            .eq("public_key", finalPublicKey);
+         if (deleteError) console.error("⚠️ Failed to delete used public_key:", deleteError);
+      } else {
+         // ✅ إنشاء hive_code جديد بناء على آخر كود داخل نفس apiary
+         const { data: lastHives } = await supabase
+            .from("hives")
+            .select("hive_code")
+            .eq("apiary_id", apiary_id)
+            .order("hive_code", { ascending: false })
+            .limit(1);
 
-    return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
-  } catch (err) {
-    console.error("❌ Unexpected error in hive creation:", err);
-    return res.status(500).json({ error: "Unexpected server error" });
-  }
+         const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
+         const [prefix, lastNum] = lastCode.split("-");
+         const nextNum = String(parseInt(lastNum) + 1).padStart(2, "0");
+
+         finalHiveCode = `${prefix}-${nextNum}`;
+      }
+
+      const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
+
+      const { data, error } = await supabase
+         .from("hives")
+         .insert([
+            {
+               hive_code: finalHiveCode,
+               hive_type,
+               hive_purpose,
+               empty_weight,
+               frame_capacity,
+               public_key: finalPublicKey,
+               qr_code: qrCode,
+               apiary_id,
+            },
+         ])
+         .select()
+         .single();
+
+      if (error) {
+         console.error("🛑 Error inserting hive:", error);
+         return res.status(400).json({ error: error.message });
+      }
+
+      console.log("✅ Hive created successfully:", {
+         hive_code: finalHiveCode,
+         public_key: finalPublicKey,
+      });
+
+      return res.status(201).json({ message: "✅ Hive created successfully", hive: data });
+   } catch (err) {
+      console.error("❌ Unexpected error in hive creation:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
 });
 
-// 🖼️ تحميل صورة QR
+// 🖼️ تحميل صورة QR مع كود الخلية واسم الشركة
 router.get("/qr-download/:public_key", async (req, res) => {
-  const { public_key } = req.params;
-  try {
-    const { data: hive } = await supabase
-      .from("hives")
-      .select("hive_code, apiary_id")
-      .eq("public_key", public_key)
-      .single();
+   const { public_key } = req.params;
 
-    if (!hive) return res.status(404).json({ error: "Hive not found" });
+   try {
+      const { data: hive } = await supabase
+         .from("hives")
+         .select("hive_code, apiary_id")
+         .eq("public_key", public_key)
+         .single();
 
-    const { data: apiary } = await supabase
-      .from("apiaries")
-      .select("company_id, owner_user_id")
-      .eq("apiary_id", hive.apiary_id)
-      .single();
+      if (!hive) {
+         return res.status(404).json({ error: "Hive not found" });
+      }
 
-    let label = "Hive Owner";
-    if (apiary?.company_id) {
-      const { data: company } = await supabase
-        .from("companies")
-        .select("company_name")
-        .eq("company_id", apiary.company_id)
-        .single();
-      label = company?.company_name || label;
-    }
+      const { data: apiary } = await supabase
+         .from("apiaries")
+         .select("company_id, owner_user_id")
+         .eq("apiary_id", hive.apiary_id)
+         .single();
 
-    const canvas = createCanvas(300, 380);
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+      let label = "Hive Owner";
+      if (apiary.company_id) {
+         const { data: company } = await supabase
+            .from("companies")
+            .select("company_name")
+            .eq("company_id", apiary.company_id)
+            .single();
+         label = company?.company_name || label;
+      }
 
-    const qrUrl = `https://yourapp.com/hive/${public_key}`;
-    const qrDataUrl = await QRCode.toDataURL(qrUrl);
-    const qrImg = await loadImage(qrDataUrl);
-    ctx.drawImage(qrImg, 25, 20, 250, 250);
+      const canvas = createCanvas(300, 380);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = "#000";
-    ctx.font = "bold 20px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText(`Ruche: ${hive.hive_code}`, 150, 300);
-    ctx.font = "16px Arial";
-    ctx.fillText(label, 150, 340);
+      const qrUrl = `https://yourapp.com/hive/${public_key}`;
+      const qrDataUrl = await QRCode.toDataURL(qrUrl);
+      const qrImg = await loadImage(qrDataUrl);
+      ctx.drawImage(qrImg, 25, 20, 250, 250);
 
-    const buffer = canvas.toBuffer("image/png");
-    res.setHeader("Content-Disposition", `attachment; filename=hive-${public_key}.png`);
-    res.setHeader("Content-Type", "image/png");
-    res.send(buffer);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "❌ Failed to generate QR image" });
-  }
+      ctx.fillStyle = "#000";
+      ctx.font = "bold 20px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`Ruche: ${hive.hive_code}`, 150, 300);
+      ctx.font = "16px Arial";
+      ctx.fillText(label, 150, 340);
+
+      const buffer = canvas.toBuffer("image/png");
+      res.setHeader("Content-Disposition", `attachment; filename=hive-${public_key}.png`);
+      res.setHeader("Content-Type", "image/png");
+      res.send(buffer);
+   } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "❌ Failed to generate QR image" });
+   }
 });
 
-/**
- * ⚠️ ORDER MATTERS: put /by-code BEFORE /:id so /:id
- * doesn’t swallow /by-code/...
- */
-// ✅ GET hive by hive_code (ORDERED BEFORE /:id)
-router.get("/by-code/:code", authenticateUser, async (req, res) => {
-  const { code } = req.params;
-  try {
-    const { data, error } = await supabase
-      .from("hives")
-      .select("*")
-      .eq("hive_code", code)
-      .single();
 
-    if (error || !data) return res.status(404).json({ error: "Hive not found" });
-    res.status(200).json(data);
-  } catch (err) {
-    console.error("❌ Error fetching hive by code:", err);
-    res.status(500).json({ error: "Unexpected server error" });
-  }
-});
-
-// ✅ PATCH hive (generic update, incl. reassign apiary)
-router.patch("/:id", authenticateUser, async (req, res) => {
-  const { id } = req.params;
-  const patch = req.body || {};
-
-  // Only allow fields you intend to update
-  const allowed = [
-    "apiary_id",
-    "hive_type",
-    "hive_purpose",
-    "empty_weight",
-    "frame_capacity",
-    // add other updatable fields here
-  ];
-  const updatePayload = Object.fromEntries(
-    Object.entries(patch).filter(([k]) => allowed.includes(k))
-  );
-
-  if (Object.keys(updatePayload).length === 0) {
-    return res.status(400).json({ error: "No valid fields to update." });
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from("hives")
-      .update(updatePayload)
-      .eq("hive_id", id)
-      .select()
-      .maybeSingle();
-
-    if (error) return res.status(400).json({ error: error.message });
-    if (!data) return res.status(404).json({ error: "Hive not found" });
-
-    return res.status(200).json({ hive: data });
-  } catch (err) {
-    console.error("❌ Error updating hive:", err);
-    res.status(500).json({ error: "Unexpected server error" });
-  }
-});
-
-// (Optional) dedicated reassign endpoint
-router.patch("/:id/reassign", authenticateUser, async (req, res) => {
-  const { id } = req.params;
-  const { apiary_id } = req.body;
-  if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
-
-  try {
-    const { data, error } = await supabase
-      .from("hives")
-      .update({ apiary_id })
-      .eq("hive_id", id)
-      .select()
-      .maybeSingle();
-
-    if (error) return res.status(400).json({ error: error.message });
-    if (!data) return res.status(404).json({ error: "Hive not found" });
-
-    res.status(200).json({ hive: data, message: "Hive reassigned successfully" });
-  } catch (err) {
-    console.error("❌ Error reassigning hive:", err);
-    res.status(500).json({ error: "Unexpected server error" });
-  }
-});
 
 // ✅ جلب خلية حسب ID
 router.get("/:id", authenticateUser, async (req, res) => {
-  const { id } = req.params;
-  try {
-    const { data, error } = await supabase
-      .from("hives")
-      .select("*")
-      .eq("hive_id", id)
-      .single();
+   const { id } = req.params;
 
-    if (error || !data) return res.status(404).json({ error: "Hive not found" });
-    res.status(200).json(data);
-  } catch (err) {
-    console.error("Error fetching hive:", err);
-    res.status(500).json({ error: "Unexpected server error while fetching hive" });
-  }
+   try {
+      const { data, error } = await supabase.from("hives").select("*").eq("hive_id", id).single();
+
+      if (error || !data) {
+         return res.status(404).json({ error: "Hive not found" });
+      }
+
+      res.status(200).json(data);
+   } catch (err) {
+      console.error("Error fetching hive:", err);
+      res.status(500).json({ error: "Unexpected server error while fetching hive" });
+   }
 });
 
 // 🔍 Get apiary name by hive_id
 router.get("/:id/apiary-name", authenticateUser, async (req, res) => {
-  const { id } = req.params;
-  try {
-    const { data: hive, error: hiveError } = await supabase
-      .from("hives")
-      .select("apiary_id")
-      .eq("hive_id", id)
-      .single();
-    if (hiveError || !hive) return res.status(404).json({ error: "Hive not found" });
+   const { id } = req.params;
+ 
+   try {
+     const { data: hive, error: hiveError } = await supabase
+       .from("hives")
+       .select("apiary_id")
+       .eq("hive_id", id)
+       .single();
+ 
+     if (hiveError || !hive) {
+       return res.status(404).json({ error: "Hive not found" });
+     }
+ 
+     const { data: apiary, error: apiaryError } = await supabase
+       .from("apiaries")
+       .select("apiary_name")
+       .eq("apiary_id", hive.apiary_id)
+       .single();
+ 
+     if (apiaryError || !apiary) {
+       return res.status(404).json({ error: "Apiary not found" });
+     }
+ 
+     res.status(200).json({ apiary_name: apiary.apiary_name });
+   } catch (err) {
+     console.error("Error fetching apiary name:", err);
+     res.status(500).json({ error: "Unexpected server error" });
+   }
+ });
 
-    const { data: apiary, error: apiaryError } = await supabase
-      .from("apiaries")
-      .select("apiary_name")
-      .eq("apiary_id", hive.apiary_id)
-      .single();
-    if (apiaryError || !apiary) return res.status(404).json({ error: "Apiary not found" });
+ // ✅ GET hive by hive_code
+router.get("/by-code/:code", authenticateUser, async (req, res) => {
+   const { code } = req.params;
 
-    res.status(200).json({ apiary_name: apiary.apiary_name });
-  } catch (err) {
-    console.error("Error fetching apiary name:", err);
-    res.status(500).json({ error: "Unexpected server error" });
-  }
+   try {
+      const { data, error } = await supabase
+         .from("hives")
+         .select("*")
+         .eq("hive_code", code)
+         .single();
+
+      if (error || !data) {
+         return res.status(404).json({ error: "Hive not found" });
+      }
+
+      res.status(200).json(data);
+   } catch (err) {
+      console.error("❌ Error fetching hive by code:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
 });
+
 
 module.exports = router;
