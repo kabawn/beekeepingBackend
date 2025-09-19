@@ -37,6 +37,8 @@ const notationConfigRouter = require('./routes/notationConfig');
 const colonyNotationsRouter = require('./routes/colonyNotations');
 const infoQueenRouter = require('./routes/infoQueen');
 const inventoryRouter = require("./routes/inventory");
+const pairingSessions =  require("./routes/pairingSessions")
+
 
 
 
@@ -61,6 +63,8 @@ app.use('/api/notation-config', notationConfigRouter);
 app.use('/api/colony-notations', colonyNotationsRouter);
 app.use('/api/info-queen', infoQueenRouter);
 app.use('/api/inventory', inventoryRouter);
+app.use("/api/pairing-sessions", pairingSessions  );
+
 
 
 app.get("/", (req, res) => {
