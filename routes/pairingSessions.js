@@ -6,11 +6,6 @@ const authenticateUser = require("../middlewares/authMiddleware");
 
 /**
  * POST /api/pairing-sessions
- * Save a completed session (one-shot).
- * body: {
- *   apiary_id, season_label?, started_at, ended_at, expected_hive_ids: number[],
- *   links: [{hive_id, super_id}], user_id?
- * }
  */
 router.post("/", authenticateUser, async (req, res) => {
    const {
@@ -30,7 +25,6 @@ router.post("/", authenticateUser, async (req, res) => {
    try {
       const expected_count = expected_hive_ids.length;
 
-      // 1) insert session
       const { data: session, error: sErr } = await supabase
          .from("pairing_sessions")
          .insert([
@@ -39,7 +33,7 @@ router.post("/", authenticateUser, async (req, res) => {
                season_label,
                started_at,
                ended_at,
-               expected_hive_ids, // stored as array (preferred) in Supabase (jsonb)
+               expected_hive_ids,
                expected_count,
                user_id,
             },
@@ -49,7 +43,6 @@ router.post("/", authenticateUser, async (req, res) => {
 
       if (sErr) return res.status(400).json({ error: sErr.message });
 
-      // 2) insert links (if any)
       if (links.length) {
          const rows = links.map((l) => ({
             session_id: session.id,
@@ -70,13 +63,11 @@ router.post("/", authenticateUser, async (req, res) => {
 
 /**
  * GET /api/pairing-sessions/by-apiary/:apiaryId
- * List sessions for an apiary + quick aggregates.
  */
 router.get("/by-apiary/:apiaryId", authenticateUser, async (req, res) => {
    const { apiaryId } = req.params;
 
    try {
-      // sessions
       const { data: sessions, error: sErr } = await supabase
          .from("pairing_sessions")
          .select("*")
@@ -86,7 +77,6 @@ router.get("/by-apiary/:apiaryId", authenticateUser, async (req, res) => {
       if (sErr) return res.status(400).json({ error: sErr.message });
       if (!sessions?.length) return res.json([]);
 
-      // links for all sessions
       const ids = sessions.map((s) => s.id);
       const { data: links, error: lErr } = await supabase
          .from("pairing_session_links")
@@ -95,7 +85,6 @@ router.get("/by-apiary/:apiaryId", authenticateUser, async (req, res) => {
 
       if (lErr) return res.status(400).json({ error: lErr.message });
 
-      // aggregate in Node
       const bySession = new Map();
       for (const s of sessions) bySession.set(s.id, { supers: 0, hiveSet: new Set() });
 
@@ -132,7 +121,6 @@ router.get("/by-apiary/:apiaryId", authenticateUser, async (req, res) => {
 
 /**
  * GET /api/pairing-sessions/:id
- * Detailed view: session, links grouped by hive, and "unlinked" list.
  */
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
@@ -154,14 +142,13 @@ router.get("/:id", authenticateUser, async (req, res) => {
       if (lErr) return res.status(400).json({ error: lErr.message });
 
       // group by hive
-      const map = new Map(); // hive_id -> [super_id...]
+      const map = new Map();
       for (const row of links) {
          const k = String(row.hive_id);
          if (!map.has(k)) map.set(k, []);
          map.get(k).push(row.super_id);
       }
 
-      // fetch codes for display
       const hiveIds = Array.from(map.keys()).map((x) => Number(x));
       const supIds = links.map((l) => l.super_id);
 
@@ -188,14 +175,12 @@ router.get("/:id", authenticateUser, async (req, res) => {
          })),
       }));
 
-      // Normalize expected_hive_ids (array or JSON/text)
+      // Normalize expected_hive_ids possibly stored as JSON/text
       let expectedIdsRaw = session.expected_hive_ids || [];
       if (typeof expectedIdsRaw === "string") {
          try {
-            // try JSON first: '["1","2",3]'
             expectedIdsRaw = JSON.parse(expectedIdsRaw);
          } catch {
-            // fallback if someone stored "1,2,3"
             expectedIdsRaw = expectedIdsRaw
                .split(",")
                .map((s) => s.trim())
@@ -234,6 +219,34 @@ router.get("/:id", authenticateUser, async (req, res) => {
          linked,
          unlinked,
       });
+   } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+/**
+ * DELETE /api/pairing-sessions/:id
+ * Removes a session and its link rows.
+ */
+router.delete("/:id", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+   const sid = Number(id);
+   if (!Number.isFinite(sid)) {
+      return res.status(400).json({ error: "Invalid session id" });
+   }
+
+   try {
+      // If you have FK with ON DELETE CASCADE on pairing_session_links(session_id),
+      // the next explicit delete is not necessary — but harmless.
+      await supabase.from("pairing_session_links").delete().eq("session_id", sid);
+
+      const { error: delErr } = await supabase.from("pairing_sessions").delete().eq("id", sid);
+
+      if (delErr) return res.status(400).json({ error: delErr.message });
+
+      // 204 No Content keeps it clean
+      return res.status(204).send();
    } catch (e) {
       console.error(e);
       return res.status(500).json({ error: "Unexpected server error" });
