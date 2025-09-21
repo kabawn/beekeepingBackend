@@ -184,6 +184,7 @@ router.post("/:id/entries", authenticateUser, async (req, res) => {
          return res.json({ ok: true, mode: "updated" });
       } else {
          // Try insert; if a concurrent insert won the race, merge-UPDATE
+         // Try insert; if a concurrent insert won the race, merge-UPDATE with a tiny retry
          const { error: insErr } = await supabase
             .from("notations_session_entries")
             .insert([{ session_id: id, hive_id, answers: newAnswers }]);
@@ -192,20 +193,33 @@ router.post("/:id/entries", authenticateUser, async (req, res) => {
             const code = insErr.code || "";
             const msg = insErr.message || "";
 
-            // Postgres unique_violation = 23505
+            // unique_violation
             if (code === "23505" || /duplicate key/i.test(msg)) {
-               // Row exists now; fetch, merge, update
-               const { data: row, error: selErr } = await supabase
-                  .from("notations_session_entries")
-                  .select("id, answers")
-                  .eq("session_id", id)
-                  .eq("hive_id", hive_id)
-                  .single();
+               // small retry loop in case the other tx hasn't committed yet
+               let row = null;
+               let lastErr = null;
+               for (let attempt = 0; attempt < 3 && !row; attempt += 1) {
+                  const r = await supabase
+                     .from("notations_session_entries")
+                     .select("id, answers")
+                     .eq("session_id", id)
+                     .eq("hive_id", hive_id)
+                     .maybeSingle(); // tolerant
 
-               if (selErr || !row) return res.status(400).json({ error: insErr.message });
+                  lastErr = r.error;
+                  row = r.data;
+                  if (!row) {
+                     // backoff 20ms, 40ms
+                     await new Promise((res) => setTimeout(res, 20 * (attempt + 1)));
+                  }
+               }
+
+               if (!row) {
+                  // tell client to retry once; or 409 Conflict
+                  return res.status(409).json({ error: "conflict, please retry" });
+               }
 
                const merged = { ...(row.answers || {}), ...newAnswers };
-
                const { error: up2Err } = await supabase
                   .from("notations_session_entries")
                   .update({ answers: merged, updated_at: new Date().toISOString() })
@@ -318,7 +332,7 @@ router.get("/by-apiary/:apiaryId", authenticateUser, async (req, res) => {
             selected_keys: s.selected_keys || [],
             expected_count: s.expected_count,
             hives_notated_count: hivesNotated,
-            entries_count: hivesNotated,     
+            entries_count: hivesNotated,
             unvisited_count: unvisited,
             answers_count: agg.answersCount,
          };
