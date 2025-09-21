@@ -318,7 +318,7 @@ router.get("/by-apiary/:apiaryId", authenticateUser, async (req, res) => {
             selected_keys: s.selected_keys || [],
             expected_count: s.expected_count,
             hives_notated_count: hivesNotated,
-            entries_count: hivesNotated,     b
+            entries_count: hivesNotated,     
             unvisited_count: unvisited,
             answers_count: agg.answersCount,
          };
