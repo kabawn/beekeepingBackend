@@ -103,7 +103,7 @@ router.post("/", authenticateUser, async (req, res) => {
                expected_hive_ids: normalizedExpected,
                expected_count,
                started_at: startedAt,
-               ended_at: startedAt, // keep NOT NULL happy; finish will overwrite
+               ended_at: startedAt, 
                user_id,
             },
          ])
