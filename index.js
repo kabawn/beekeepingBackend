@@ -39,6 +39,7 @@ const infoQueenRouter = require('./routes/infoQueen');
 const inventoryRouter = require("./routes/inventory");
 const pairingSessions =  require("./routes/pairingSessions")
 const notationSessionsRouter = require("./routes/notationSessions");
+const nucCycles = require("./routes/nucCycles");
 
 
 
@@ -66,6 +67,7 @@ app.use('/api/info-queen', infoQueenRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use("/api/pairing-sessions", pairingSessions  );
 app.use("/api/notation-sessions", notationSessionsRouter);
+app.use("/api/nuc-cycles", nucCycles);
 
 
 
