@@ -68,6 +68,7 @@ app.use('/api/inventory', inventoryRouter);
 app.use("/api/pairing-sessions", pairingSessions  );
 app.use("/api/notation-sessions", notationSessionsRouter);
 app.use("/api/nuc-cycles", nucCycles);
+app.use("/api/super-types", require("./routes/superTypes"));
 
 
 
