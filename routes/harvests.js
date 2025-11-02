@@ -316,5 +316,36 @@ router.get("/export.csv", async (req, res) => {
   }
 });
 
+router.get("/series", authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const from = req.query.from ? new Date(`${req.query.from}T00:00:00.000Z`) : null;
+    const to   = req.query.to   ? new Date(`${req.query.to}T00:00:00.000Z`)   : null;
+    const hiveId   = req.query.hive_id ? +req.query.hive_id : null;
+    const apiaryId = req.query.apiary_id ? +req.query.apiary_id : null;
+
+    const sql = `
+      SELECT to_char(date_trunc('day', har.harvest_date), 'YYYY-MM-DD') AS d,
+             SUM(har.net_honey_kg)::float8                              AS net
+      FROM harvests har
+      JOIN supers s ON har.super_id = s.super_id
+      JOIN hives  h ON s.hive_id = h.hive_id
+      JOIN apiaries a ON h.apiary_id = a.apiary_id
+      WHERE a.owner_user_id = $1
+        AND ($2::timestamptz IS NULL OR har.harvest_date >= $2)
+        AND ($3::timestamptz IS NULL OR har.harvest_date <  $3)
+        AND ($4::int IS NULL OR h.hive_id = $4)
+        AND ($5::int IS NULL OR a.apiary_id = $5)
+      GROUP BY 1
+      ORDER BY 1;
+    `;
+    const { rows } = await pool.query(sql, [userId, from, to, hiveId, apiaryId]);
+    res.json(rows);
+  } catch (e) {
+    console.error("Error /series:", e);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 module.exports = router;
