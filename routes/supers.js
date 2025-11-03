@@ -272,13 +272,14 @@ router.post("/", authenticateUser, async (req, res) => {
 });
 
 
-// POST /supers/batch  -> [{public_key, super_type_name, purpose_super?}, ...]
+// POST /supers/batch  -> [{ public_key, super_type_name, purpose_super? }, ...]
 router.post("/batch", authenticateUser, async (req, res) => {
   const owner_user_id = req.user.id;
   const items = Array.isArray(req.body) ? req.body : [];
   if (!items.length) return res.status(400).json({ error: "Empty batch" });
 
   const results = [];
+
   for (const row of items) {
     const { public_key, super_type_name, purpose_super = "honey" } = row || {};
     if (!public_key || !super_type_name) {
@@ -286,53 +287,75 @@ router.post("/batch", authenticateUser, async (req, res) => {
       continue;
     }
 
-    // delegate to your single-create logic by calling supabase directly (re-using core of /supers)
     try {
-      // ---- fetch tare from super_types (per user) ----
-      const { data: st } = await supabase
+      // 1) Resolve super type (tare) for this user
+      const { data: st, error: stErr } = await supabase
         .from("super_types")
         .select("name, weight_empty_kg")
         .eq("owner_user_id", owner_user_id)
         .eq("name", super_type_name.trim())
         .maybeSingle();
-
+      if (stErr) throw stErr;
       if (!st) {
         results.push({ ok: false, public_key, error: "super_type_name not found" });
         continue;
       }
 
-      // ---- check uniqueness of public_key ----
+      // 2) Uniqueness check on supers.public_key
       const { data: existing } = await supabase
-        .from("supers").select("super_id").eq("public_key", public_key).maybeSingle();
+        .from("supers")
+        .select("super_id")
+        .eq("public_key", public_key)
+        .maybeSingle();
       if (existing) {
         results.push({ ok: false, public_key, error: "Public key already used" });
         continue;
       }
 
-      // ---- generate super_code (same sequence as your /supers) ----
-      let finalSuperCode = "01-01";
-      const { data: lastSuper } = await supabase
-        .from("supers")
-        .select("super_code")
-        .order("created_at", { ascending: false })
-        .limit(1)
+      // 3) Try to claim a code from available_public_keys using this public_key
+      let finalSuperCode = null;
+      let claimedAvailableId = null;
+
+      const { data: avail, error: availErr } = await supabase
+        .from("available_public_keys")
+        .select("id, code")
+        .eq("public_key", public_key)
         .maybeSingle();
-      if (lastSuper?.super_code) {
-        const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
-        let newSuffix = suffix + 1;
-        let newPrefix = prefix;
-        if (newSuffix > 99) { newSuffix = 1; newPrefix += 1; }
-        finalSuperCode = `${String(newPrefix).padStart(2,"0")}-${String(newSuffix).padStart(2,"0")}`;
+      if (availErr) throw availErr;
+
+      if (avail?.code) {
+        finalSuperCode = String(avail.code).trim();
+        claimedAvailableId = avail.id; // we'll delete it AFTER successful insert
       }
 
-      // ---- insert ----
+      // 4) If no code from available_public_keys → generate next sequential code
+      if (!finalSuperCode) {
+        finalSuperCode = "01-01";
+        const { data: lastSuper, error: lastErr } = await supabase
+          .from("supers")
+          .select("super_code")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (lastErr) throw lastErr;
+
+        if (lastSuper?.super_code) {
+          const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
+          let newSuffix = (Number.isFinite(suffix) ? suffix : 0) + 1;
+          let newPrefix = Number.isFinite(prefix) ? prefix : 1;
+          if (newSuffix > 99) { newSuffix = 1; newPrefix += 1; }
+          finalSuperCode = `${String(newPrefix).padStart(2,"0")}-${String(newSuffix).padStart(2,"0")}`;
+        }
+      }
+
+      // 5) Insert the super
       const { data: created, error: insErr } = await supabase
         .from("supers")
         .insert([{
           super_code: finalSuperCode,
-          super_type: st.name,
+          super_type: st.name,                 // keep text label
           purpose_super,
-          qr_code: null,                 // you said QR holds only the public_key text
+          qr_code: null,                       // your label QR just encodes the public_key
           weight_empty: Number(st.weight_empty_kg),
           active: true,
           service_in: true,
@@ -343,6 +366,25 @@ router.post("/batch", authenticateUser, async (req, res) => {
         .select("super_id, super_code, super_type, weight_empty, public_key")
         .single();
       if (insErr) throw insErr;
+
+      // 6) If we claimed a key from available_public_keys → DELETE it now
+      if (claimedAvailableId) {
+        const { error: delErr } = await supabase
+          .from("available_public_keys")
+          .delete()
+          .eq("id", claimedAvailableId);
+        if (delErr) {
+          // Not fatal for the super creation, but report it
+          results.push({
+            ok: true,
+            public_key,
+            super_code: created.super_code,
+            id: created.super_id,
+            warning: "Super created but failed to delete available_public_keys row",
+          });
+          continue;
+        }
+      }
 
       results.push({ ok: true, public_key, super_code: created.super_code, id: created.super_id });
     } catch (e) {
