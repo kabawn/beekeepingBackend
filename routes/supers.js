@@ -272,6 +272,89 @@ router.post("/", authenticateUser, async (req, res) => {
 });
 
 
+// POST /supers/batch  -> [{public_key, super_type_name, purpose_super?}, ...]
+router.post("/batch", authenticateUser, async (req, res) => {
+  const owner_user_id = req.user.id;
+  const items = Array.isArray(req.body) ? req.body : [];
+  if (!items.length) return res.status(400).json({ error: "Empty batch" });
+
+  const results = [];
+  for (const row of items) {
+    const { public_key, super_type_name, purpose_super = "honey" } = row || {};
+    if (!public_key || !super_type_name) {
+      results.push({ ok: false, public_key, error: "Missing public_key or super_type_name" });
+      continue;
+    }
+
+    // delegate to your single-create logic by calling supabase directly (re-using core of /supers)
+    try {
+      // ---- fetch tare from super_types (per user) ----
+      const { data: st } = await supabase
+        .from("super_types")
+        .select("name, weight_empty_kg")
+        .eq("owner_user_id", owner_user_id)
+        .eq("name", super_type_name.trim())
+        .maybeSingle();
+
+      if (!st) {
+        results.push({ ok: false, public_key, error: "super_type_name not found" });
+        continue;
+      }
+
+      // ---- check uniqueness of public_key ----
+      const { data: existing } = await supabase
+        .from("supers").select("super_id").eq("public_key", public_key).maybeSingle();
+      if (existing) {
+        results.push({ ok: false, public_key, error: "Public key already used" });
+        continue;
+      }
+
+      // ---- generate super_code (same sequence as your /supers) ----
+      let finalSuperCode = "01-01";
+      const { data: lastSuper } = await supabase
+        .from("supers")
+        .select("super_code")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastSuper?.super_code) {
+        const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
+        let newSuffix = suffix + 1;
+        let newPrefix = prefix;
+        if (newSuffix > 99) { newSuffix = 1; newPrefix += 1; }
+        finalSuperCode = `${String(newPrefix).padStart(2,"0")}-${String(newSuffix).padStart(2,"0")}`;
+      }
+
+      // ---- insert ----
+      const { data: created, error: insErr } = await supabase
+        .from("supers")
+        .insert([{
+          super_code: finalSuperCode,
+          super_type: st.name,
+          purpose_super,
+          qr_code: null,                 // you said QR holds only the public_key text
+          weight_empty: Number(st.weight_empty_kg),
+          active: true,
+          service_in: true,
+          hive_id: null,
+          public_key,
+          owner_user_id,
+        }])
+        .select("super_id, super_code, super_type, weight_empty, public_key")
+        .single();
+      if (insErr) throw insErr;
+
+      results.push({ ok: true, public_key, super_code: created.super_code, id: created.super_id });
+    } catch (e) {
+      results.push({ ok: false, public_key, error: e.message || "create failed" });
+    }
+  }
+
+  res.status(207).json({ results });
+});
+
+
+
 // ✅ تحديث عاسلة
 router.put("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
