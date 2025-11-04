@@ -72,53 +72,56 @@ router.patch("/:id/use", authenticateUser, async (req, res) => {
 });
 
 // routes/availablePublicKeys.js
+// routes/availablePublicKeys.js
 router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
-   const { public_key } = req.params;
+  const { public_key } = req.params;
 
-   try {
-      // 1) If super already exists → return its super_code
-      const { data: s, error: sErr } = await supabase
-         .from("supers")
-         .select("super_id, super_code, public_key")
-         .eq("public_key", public_key)
-         .maybeSingle();
-      if (sErr) throw sErr;
-      if (s) {
-         return res.status(200).json({
-            source: "supers",
-            public_key: s.public_key,
-            code: s.super_code, // printed code already assigned
-            exists: true,
-            is_used: true,
-         });
-      }
+  try {
+    // 1) Look in available_public_keys FIRST (we're in the "add" flow)
+    const { data: apk, error: aErr } = await supabase
+      .from("available_public_keys")
+      .select("code, is_used, used_as, used_id")
+      .eq("public_key", public_key)
+      .maybeSingle();
+    if (aErr) throw aErr;
 
-      // 2) Otherwise resolve from available_public_keys
-      const { data: apk, error: aErr } = await supabase
-         .from("available_public_keys")
-         .select("code, is_used, used, used_for, used_id")
-         .eq("public_key", public_key)
-         .maybeSingle();
-      if (aErr) throw aErr;
-
-      if (!apk?.code) {
-         return res.status(404).json({ error: "Public key not found" });
-      }
-
-      const alreadyUsed = apk.is_used === true || apk.used === true || !!apk.used_for;
-
+    if (apk?.code) {
+      const alreadyUsed = apk.is_used === true || !!apk.used_as || apk.used_id != null;
       return res.status(200).json({
-         source: "available_public_keys",
-         public_key,
-         code: apk.code, // ← label code to show in the scanner toast
-         exists: false,
-         is_used: alreadyUsed,
+        source: "available_public_keys",
+        public_key,
+        code: String(apk.code),   // ← the human label you want to show on scan
+        exists: true,             // ← IMPORTANT: it's found, so true
+        is_used: alreadyUsed,
       });
-   } catch (err) {
-      console.error("❌ /available-public-keys/resolve failed:", err);
-      return res.status(500).json({ error: "Unexpected server error" });
-   }
+    }
+
+    // 2) Not in available_public_keys? Maybe it already became a super
+    const { data: s, error: sErr } = await supabase
+      .from("supers")
+      .select("super_code, public_key")
+      .eq("public_key", public_key)
+      .maybeSingle();
+    if (sErr) throw sErr;
+
+    if (s?.super_code) {
+      return res.status(200).json({
+        source: "supers",
+        public_key: s.public_key,
+        code: String(s.super_code), // keep the same 'code' field name for the client
+        exists: true,
+        is_used: true,
+      });
+    }
+
+    // 3) Nothing found anywhere
+    return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
+  } catch (err) {
+    console.error("❌ /available-keys/resolve failed:", err);
+    return res.status(500).json({ error: "Unexpected server error" });
+  }
 });
+
 
 // ✅ جلب أول كود غير مستخدم
 router.get("/next-code", authenticateUser, async (req, res) => {
