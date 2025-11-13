@@ -59,7 +59,7 @@ router.get("/:id", authenticateUser, async (req, res) => {
       .from("hive_types")
       .select("*")
       .eq("owner_user_id", userId)
-      .eq("hive_type_id", id)
+      .eq("id", id)            // 🔁 use `id` instead of `hive_type_id`
       .maybeSingle();
 
     if (error) return res.status(400).json({ error: error.message });
@@ -97,7 +97,7 @@ router.post("/", authenticateUser, async (req, res) => {
     // Optional: avoid duplicate names for the same user
     const { data: existing, error: existingError } = await supabase
       .from("hive_types")
-      .select("hive_type_id")
+      .select("id")              // 🔁 use `id`
       .eq("owner_user_id", userId)
       .ilike("name", trimmedName)
       .maybeSingle();
@@ -134,7 +134,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
     return res.status(201).json({
       message: "✅ Hive type created successfully",
-      hive_type: data,
+      hive_type: data, // { id, name, ... }
     });
   } catch (err) {
     console.error("❌ Error creating hive type:", err);
@@ -174,10 +174,10 @@ router.put("/:id", authenticateUser, async (req, res) => {
     try {
       const { data: existing, error: existingError } = await supabase
         .from("hive_types")
-        .select("hive_type_id")
+        .select("id")            // 🔁 use `id`
         .eq("owner_user_id", userId)
         .ilike("name", trimmedName)
-        .neq("hive_type_id", id)
+        .neq("id", id)           // 🔁 use `id`
         .maybeSingle();
 
       if (existingError) {
@@ -199,7 +199,6 @@ router.put("/:id", authenticateUser, async (req, res) => {
 
   if (weight_empty_kg !== undefined) {
     if (weight_empty_kg === null || weight_empty_kg === "") {
-      // allow clearing the value
       updatePayload.weight_empty_kg = null;
     } else {
       const w = Number(weight_empty_kg);
@@ -221,7 +220,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
       .from("hive_types")
       .update(updatePayload)
       .eq("owner_user_id", userId)
-      .eq("hive_type_id", id)
+      .eq("id", id)               // 🔁 use `id`
       .select()
       .maybeSingle();
 
@@ -262,7 +261,7 @@ router.delete("/:id", authenticateUser, async (req, res) => {
       .from("hive_types")
       .delete()
       .eq("owner_user_id", userId)
-      .eq("hive_type_id", id)
+      .eq("id", id)              // 🔁 use `id`
       .select()
       .maybeSingle();
 
