@@ -40,6 +40,7 @@ const inventoryRouter = require("./routes/inventory");
 const pairingSessions =  require("./routes/pairingSessions")
 const notationSessionsRouter = require("./routes/notationSessions");
 const nucCycles = require("./routes/nucCycles");
+const hiveTypesRoutes = require("./routes/hiveTypes");
 
 
 
@@ -69,6 +70,7 @@ app.use("/api/pairing-sessions", pairingSessions  );
 app.use("/api/notation-sessions", notationSessionsRouter);
 app.use("/api/nuc-cycles", nucCycles);
 app.use("/api/super-types", require("./routes/superTypes"));
+app.use("/hive-types", hiveTypesRoutes);
 
 
 
