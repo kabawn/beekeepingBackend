@@ -41,6 +41,7 @@ const pairingSessions =  require("./routes/pairingSessions")
 const notationSessionsRouter = require("./routes/notationSessions");
 const nucCycles = require("./routes/nucCycles");
 const hiveTypesRoutes = require("./routes/hiveTypes");
+const hivePurposesRoutes = require("./routes/hivePurposes");
 
 
 
@@ -71,6 +72,7 @@ app.use("/api/notation-sessions", notationSessionsRouter);
 app.use("/api/nuc-cycles", nucCycles);
 app.use("/api/super-types", require("./routes/superTypes"));
 app.use("/api/hive-types", hiveTypesRoutes);
+app.use("/api/hive-purposes", hivePurposesRoutes);
 
 
 
