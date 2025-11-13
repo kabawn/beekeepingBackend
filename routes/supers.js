@@ -30,20 +30,36 @@ router.get("/", authenticateUser, async (req, res) => {
 });
 
 // ✅ Get all supers belonging to the authenticated user
+// ✅ Get paginated supers belonging to the authenticated user
 router.get("/my", authenticateUser, async (req, res) => {
-   const userId = req.user.id;
+  const userId = req.user.id;
 
-   try {
-      const { data, error } = await supabase.from("supers").select("*").eq("owner_user_id", userId);
+  // 🔹 Read pagination from query (?limit=100&offset=0)
+  const limit = Math.min(Number(req.query.limit) || 100, 500); // hard cap for safety
+  const offset = Number(req.query.offset) || 0;
 
-      if (error) throw error;
+  // Supabase .range(from, to) is inclusive
+  const from = offset;
+  const to = offset + limit - 1;
 
-      res.status(200).json(data);
-   } catch (err) {
-      console.error("❌ Error fetching user supers:", err);
-      res.status(500).json({ error: "Unexpected server error" });
-   }
+  try {
+    const { data, error } = await supabase
+      .from("supers")
+      .select("*")
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false }) // 🔹 newest first
+      .range(from, to);
+
+    if (error) throw error;
+
+    // keep same shape as before: just an array
+    res.status(200).json(data);
+  } catch (err) {
+    console.error("❌ Error fetching user supers:", err);
+    res.status(500).json({ error: "Unexpected server error" });
+  }
 });
+
 
 // ✅ جلب عاسلة حسب ID
 router.get("/:id", authenticateUser, async (req, res) => {
