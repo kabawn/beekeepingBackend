@@ -29,38 +29,50 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
-// ✅ Get all supers belonging to the authenticated user
-// ✅ Get paginated supers belonging to the authenticated user
-// ✅ Get paginated supers belonging to the authenticated user + total count
+
+// ✅ Get paginated supers + total count + active count
 router.get("/my", authenticateUser, async (req, res) => {
   const userId = req.user.id;
 
-  const limit = Math.min(Number(req.query.limit) || 100, 500); // hard cap
+  const limit = Math.min(Number(req.query.limit) || 100, 500); // avoid insane values
   const offset = Number(req.query.offset) || 0;
 
   const from = offset;
   const to = offset + limit - 1;
 
   try {
+    // 1️⃣ Page data + TOTAL count
     const { data, error, count } = await supabase
       .from("supers")
-      .select("*", { count: "exact" })
+      .select("*", { count: "exact" })      // uses your columns: super_id, active, created_at, etc.
       .eq("owner_user_id", userId)
       .order("created_at", { ascending: false })
       .range(from, to);
 
     if (error) throw error;
 
-    // 🔹 We now return both the page + total count
+    const total = count || 0;
+
+    // 2️⃣ ACTIVE TOTAL (only count, no data)
+    const { count: activeCount, error: activeErr } = await supabase
+      .from("supers")
+      .select("super_id", { count: "exact", head: true })
+      .eq("owner_user_id", userId)
+      .eq("active", true);
+
+    if (activeErr) throw activeErr;
+
     res.status(200).json({
       supers: data || [],
-      total: count || 0,
+      total,
+      active_total: activeCount || 0,
     });
   } catch (err) {
     console.error("❌ Error fetching user supers:", err);
     res.status(500).json({ error: "Unexpected server error" });
   }
 });
+
 
 
 
