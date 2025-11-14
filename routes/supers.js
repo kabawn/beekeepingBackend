@@ -31,47 +31,64 @@ router.get("/", authenticateUser, async (req, res) => {
 
 
 // ✅ Get paginated supers + total count + active count
+// ✅ Get paginated supers + total count + active count
 router.get("/my", authenticateUser, async (req, res) => {
   const userId = req.user.id;
 
-  const limit = Math.min(Number(req.query.limit) || 100, 500); // avoid insane values
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
   const offset = Number(req.query.offset) || 0;
-
   const from = offset;
   const to = offset + limit - 1;
 
-  try {
-    // 1️⃣ Page data + TOTAL count
-    const { data, error, count } = await supabase
-      .from("supers")
-      .select("*", { count: "exact" })      // uses your columns: super_id, active, created_at, etc.
-      .eq("owner_user_id", userId)
-      .order("created_at", { ascending: false })
-      .range(from, to);
+  // 🔹 optional filter: ?active=true / ?active=false
+  const activeParam = req.query.active; // "true" | "false" | undefined
 
+  try {
+    // 1️⃣ Base query for the paginated list
+    let pageQuery = supabase
+      .from("supers")
+      .select("*", { count: "exact" }) // count here is WITH the filter
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (activeParam === "true") {
+      pageQuery = pageQuery.eq("active", true);
+    } else if (activeParam === "false") {
+      pageQuery = pageQuery.eq("active", false);
+    }
+
+    const { data, error, count: pageCount } = await pageQuery.range(from, to);
     if (error) throw error;
 
-    const total = count || 0;
+    // 2️⃣ Global total (all supers, no filter)
+    const { count: totalAll, error: totalErr } = await supabase
+      .from("supers")
+      .select("super_id", { count: "exact", head: true })
+      .eq("owner_user_id", userId);
+    if (totalErr) throw totalErr;
 
-    // 2️⃣ ACTIVE TOTAL (only count, no data)
-    const { count: activeCount, error: activeErr } = await supabase
+    // 3️⃣ Global active total (all active supers, no filter)
+    const { count: activeAll, error: activeErr } = await supabase
       .from("supers")
       .select("super_id", { count: "exact", head: true })
       .eq("owner_user_id", userId)
       .eq("active", true);
-
     if (activeErr) throw activeErr;
 
     res.status(200).json({
       supers: data || [],
-      total,
-      active_total: activeCount || 0,
+      // 🔹 pageCount = total count of THIS FILTER (used if you ever want pagination info)
+      filtered_total: pageCount || 0,
+      // 🔹 global numbers for header:
+      total: totalAll || 0,
+      active_total: activeAll || 0,
     });
   } catch (err) {
     console.error("❌ Error fetching user supers:", err);
     res.status(500).json({ error: "Unexpected server error" });
   }
 });
+
 
 
 
