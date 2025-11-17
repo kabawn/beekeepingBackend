@@ -13,18 +13,31 @@ module.exports = async function authenticateUser(req, res, next) {
   const token = auth.split(" ")[1]; // Bearer xxx
   if (!token) return res.status(401).json({ error: "Missing access token" });
 
-  // 1) Accept device (station) tokens signed with JWT_SECRET
+  // 1) Station tokens (Pi device)
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
+
     if (payload.role === "station") {
-      req.user = { id: null, role: "station", station: payload.station || "unknown" };
+      // 🔥 المرحلة الأولى: فقط ميزان واحد لجون-فرانسوا
+      const jfmUserId = "76b4f5ae-03d7-41de-bdf6-9c1915b49009";
+
+      req.user = {
+        id: jfmUserId,                  // 👈 هذا هو المهم
+        role: "station",
+        station: payload.station || "unknown",
+      };
+
       return next();
     }
-  } catch (_) { /* not a station token → continue */ }
+  } catch (_) {
+    // إذا مش توكن محطة → نجرب Supabase
+  }
 
-  // 2) Fallback: normal Supabase user tokens (unchanged)
+  // 2) Supabase user tokens (mobile/web users)
   const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user) return res.status(401).json({ error: "Invalid or expired token" });
+  if (error || !data?.user) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
 
   const user = data.user;
 
@@ -34,6 +47,11 @@ module.exports = async function authenticateUser(req, res, next) {
     .eq("user_id", user.id)
     .single();
 
-  req.user = { id: user.id, email: user.email, plan_type: subscription?.plan_type || "free" };
+  req.user = {
+    id: user.id,
+    email: user.email,
+    plan_type: subscription?.plan_type || "free",
+  };
+
   next();
 };
