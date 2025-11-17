@@ -6,48 +6,47 @@ const authenticateUser = require("../middlewares/authMiddleware");
 
 // إنشاء منحل جديد
 router.post("/", authenticateUser, async (req, res) => {
-  const userId = req.user.id;
-  const { apiary_name, location, commune, department, land_owner_name, phone } = req.body;
+   const userId = req.user.id;
+   const { apiary_name, location, commune, department, land_owner_name, phone } = req.body;
 
-  try {
-     // جلب نوع اشتراك المستخدم
-     const subResult = await pool.query(
-        "SELECT plan_type FROM subscriptions WHERE user_id = $1 LIMIT 1",
-        [userId]
-     );
+   try {
+      // جلب نوع اشتراك المستخدم
+      const subResult = await pool.query(
+         "SELECT plan_type FROM subscriptions WHERE user_id = $1 LIMIT 1",
+         [userId]
+      );
 
-     const planType = subResult.rows[0]?.plan_type || "free";
+      const planType = subResult.rows[0]?.plan_type || "free";
 
-     // إذا كان الاشتراك free، نتحقق من عدد المناحل
-     if (planType === "free") {
-        const countResult = await pool.query(
-           "SELECT COUNT(*) FROM apiaries WHERE owner_user_id = $1",
-           [userId]
-        );
+      // إذا كان الاشتراك free، نتحقق من عدد المناحل
+      if (planType === "free") {
+         const countResult = await pool.query(
+            "SELECT COUNT(*) FROM apiaries WHERE owner_user_id = $1",
+            [userId]
+         );
 
-        const apiaryCount = parseInt(countResult.rows[0].count, 10);
+         const apiaryCount = parseInt(countResult.rows[0].count, 10);
 
-        if (apiaryCount >= 1) {
-           return res.status(403).json({
-              error: "Free users can only create one apiary. Please upgrade your plan.",
-           });
-        }
-     }
+         if (apiaryCount >= 1) {
+            return res.status(403).json({
+               error: "Free users can only create one apiary. Please upgrade your plan.",
+            });
+         }
+      }
 
-     // إنشاء المنحل
-     const insertResult = await pool.query(
-        `INSERT INTO apiaries (apiary_name, location, commune, department, land_owner_name, phone, owner_user_id)
+      // إنشاء المنحل
+      const insertResult = await pool.query(
+         `INSERT INTO apiaries (apiary_name, location, commune, department, land_owner_name, phone, owner_user_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
-        [apiary_name, location, commune, department, land_owner_name, phone, userId]
-     );
+         [apiary_name, location, commune, department, land_owner_name, phone, userId]
+      );
 
-     return res.status(201).json({ apiary: insertResult.rows[0] });
-
-  } catch (error) {
-     console.error("Error creating apiary:", error);
-     return res.status(500).json({ error: "Server error while creating apiary" });
-  }
+      return res.status(201).json({ apiary: insertResult.rows[0] });
+   } catch (error) {
+      console.error("Error creating apiary:", error);
+      return res.status(500).json({ error: "Server error while creating apiary" });
+   }
 });
 
 // ✅ عدد الخلايا في منحل معين
@@ -109,20 +108,41 @@ router.get("/:id", async (req, res) => {
 });
 
 // ✅ تحديث منحل
-router.put("/:id", async (req, res) => {
+// ✅ تحديث منحل
+router.put("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
-   const { name, city, land_owner, phone, latitude, longitude, altitude } = req.body;
+   const userId = req.user.id;
+
+   const {
+      apiary_name,
+      location, // "lat,lng" نفس ما تخزّنها في الـ POST
+      commune,
+      department,
+      land_owner_name,
+      phone,
+   } = req.body;
+
    try {
       const result = await pool.query(
-         `UPDATE apiaries 
-       SET name = $1, city = $2, land_owner = $3, phone = $4, latitude = $5, longitude = $6, altitude = $7 
-       WHERE apiary_id = $8 RETURNING *`,
-         [name, city, land_owner, phone, latitude, longitude, altitude, id]
+         `UPDATE apiaries
+          SET apiary_name = $1,
+              location = $2,
+              commune = $3,
+              department = $4,
+              land_owner_name = $5,
+              phone = $6
+          WHERE apiary_id = $7
+          AND owner_user_id = $8
+          RETURNING *`,
+         [apiary_name, location, commune, department, land_owner_name, phone, id, userId]
       );
+
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
-      res.json(result.rows[0]);
+
+      // خليه نفس ستايل الـ POST
+      res.json({ apiary: result.rows[0] });
    } catch (error) {
       console.error("Error updating apiary:", error);
       res.status(500).json({ error: "Server error while updating apiary" });
