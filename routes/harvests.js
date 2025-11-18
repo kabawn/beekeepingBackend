@@ -9,7 +9,7 @@ router.use(authenticateUser);
 
 /**
  * POST /api/harvests
- * Create a new harvest record (stores gross + empty + net)
+ * Create a new harvest record (stores gross + empty + net + hive/apiary snapshot)
  * Only allowed on supers owned by the logged-in user.
  */
 router.post("/", async (req, res) => {
@@ -29,16 +29,22 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "full_weight must be a positive number in kg" });
     }
 
-    // 2) Resolve the super and get its tare (only if owned by this user)
+    // 2) Resolve the super and get its tare + hive/apiary snapshot
     let resolved;
 
     if (public_key && String(public_key).trim()) {
       const q = await pool.query(
         `
-          SELECT super_id, weight_empty
-          FROM supers
-          WHERE public_key = $1
-            AND owner_user_id = $2
+          SELECT 
+            s.super_id, 
+            s.weight_empty,
+            h.hive_id,
+            a.apiary_id
+          FROM supers s
+          LEFT JOIN hives    h ON s.hive_id   = h.hive_id
+          LEFT JOIN apiaries a ON h.apiary_id = a.apiary_id
+          WHERE s.public_key   = $1
+            AND s.owner_user_id = $2
         `,
         [String(public_key).trim(), userId]
       );
@@ -46,10 +52,16 @@ router.post("/", async (req, res) => {
     } else if (Number.isFinite(+super_id)) {
       const q = await pool.query(
         `
-          SELECT super_id, weight_empty
-          FROM supers
-          WHERE super_id = $1
-            AND owner_user_id = $2
+          SELECT 
+            s.super_id, 
+            s.weight_empty,
+            h.hive_id,
+            a.apiary_id
+          FROM supers s
+          LEFT JOIN hives    h ON s.hive_id   = h.hive_id
+          LEFT JOIN apiaries a ON h.apiary_id = a.apiary_id
+          WHERE s.super_id     = $1
+            AND s.owner_user_id = $2
         `,
         [+super_id, userId]
       );
@@ -79,7 +91,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 4) Insert harvest (gross + empty + net + location + user_id)
+    // 4) Insert harvest (gross + empty + net + location + user_id + hive/apiary snapshot)
     const sql = `
       INSERT INTO harvests (
         super_id,
@@ -88,11 +100,22 @@ router.post("/", async (req, res) => {
         net_honey_kg,
         location,
         harvest_date,
-        user_id
-      ) VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+        user_id,
+        hive_id,
+        apiary_id
+      ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8)
       RETURNING *;
     `;
-    const params = [resolved.super_id, gross, tare, net, location || null, userId];
+    const params = [
+      resolved.super_id,
+      gross,
+      tare,
+      net,
+      location || null,
+      userId,
+      resolved.hive_id || null,
+      resolved.apiary_id || null,
+    ];
 
     const result = await pool.query(sql, params);
     const row = result.rows[0];
@@ -125,7 +148,9 @@ router.get("/", async (req, res) => {
         h.harvest_date,
         h.location,
         s.super_code,
-        s.public_key
+        s.public_key,
+        h.hive_id,
+        h.apiary_id
       FROM harvests h
       JOIN supers s ON s.super_id = h.super_id
       WHERE h.user_id = $1
@@ -152,7 +177,7 @@ router.get("/super-by-key/:public_key", async (req, res) => {
       `
         SELECT super_id AS id, super_code, public_key
         FROM supers
-        WHERE public_key = $1
+        WHERE public_key   = $1
           AND owner_user_id = $2
       `,
       [public_key.trim(), userId]
@@ -188,7 +213,9 @@ router.get("/recent", async (req, res) => {
         h.harvest_date,
         h.location,
         s.super_code,
-        s.public_key
+        s.public_key,
+        h.hive_id,
+        h.apiary_id
       FROM harvests h
       JOIN supers s ON s.super_id = h.super_id
       WHERE h.user_id = $1
@@ -249,7 +276,7 @@ router.get("/by-key/:public_key", async (req, res) => {
       `
         SELECT super_id
         FROM supers
-        WHERE public_key = $1
+        WHERE public_key   = $1
           AND owner_user_id = $2
       `,
       [publicKey, userId]
@@ -422,6 +449,7 @@ router.get("/export.csv", async (req, res) => {
 /**
  * GET /api/harvests/series
  * Time series already user-scoped via apiaries.owner_user_id
+ * Now uses hive_id/apiary_id snapshot from harvests
  */
 router.get("/series", async (req, res) => {
   try {
@@ -432,12 +460,12 @@ router.get("/series", async (req, res) => {
     const apiaryId = req.query.apiary_id ? +req.query.apiary_id : null;
 
     const sql = `
-      SELECT TO_CHAR(DATE_TRUNC('day', har.harvest_date), 'YYYY-MM-DD') AS d,
-             SUM(har.net_honey_kg)::float8                              AS net
+      SELECT 
+        TO_CHAR(DATE_TRUNC('day', har.harvest_date), 'YYYY-MM-DD') AS d,
+        SUM(har.net_honey_kg)::float8                             AS net
       FROM harvests har
-      JOIN supers s  ON har.super_id = s.super_id
-      JOIN hives  h  ON s.hive_id = h.hive_id
-      JOIN apiaries a ON h.apiary_id = a.apiary_id
+      JOIN apiaries a ON har.apiary_id = a.apiary_id
+      LEFT JOIN hives h ON har.hive_id = h.hive_id
       WHERE a.owner_user_id = $1
         AND ($2::timestamptz IS NULL OR har.harvest_date >= $2)
         AND ($3::timestamptz IS NULL OR har.harvest_date <  $3)
