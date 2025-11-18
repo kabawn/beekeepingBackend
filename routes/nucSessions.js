@@ -215,6 +215,186 @@ router.post("/:id/introduce-cells", async (req, res) => {
    }
 });
 
+/**
+ * POST /api/nuc-sessions/:id/control-summary
+ * body: {
+ *   ok_count: number,              // عدد الخلايا اللي فيها بيض (colonies en ponte)
+ *   reintroduce_count: number,     // عدد الخلايا اللي حنرجعلها cellules
+ *   check_after_days?: number      // بعد كم يوم نبرمج contrôle جديد (default = 15)
+ * }
+ *
+ * المنطق:
+ *  - نجيب كل الـ cycles المفتوحة في هذي السشن (closed_at IS NULL)
+ *  - نوزعها بهذا الترتيب:
+ *      1) أول ok_count  → ponte OK (laying_status="ok", closed_at = now)
+ *      2) بعدهم reintroduce_count → pas d'œufs + إعادة cellules
+ *      3) الباقي            → pas d'œufs بدون إعادة (session close لهذا essaim)
+ */
+router.post("/:id/control-summary", async (req, res) => {
+   const session_id = Number(req.params.id);
+   if (!session_id) return res.status(400).json({ error: "session_id is invalid" });
+
+   let { ok_count, reintroduce_count, check_after_days } = req.body || {};
+
+   ok_count = Number(ok_count) || 0;
+   reintroduce_count = Number(reintroduce_count) || 0;
+   check_after_days = Number(check_after_days) || 15;
+
+   if (ok_count < 0 || reintroduce_count < 0) {
+      return res.status(400).json({ error: "ok_count et reintroduce_count doivent être >= 0" });
+   }
+
+   try {
+      // 1) نتأكد أن السشن موجودة
+      const { data: session, error: sErr } = await supabase
+         .from("nuc_sessions")
+         .select("*")
+         .eq("id", session_id)
+         .single();
+
+      if (sErr || !session) {
+         return res.status(404).json({ error: "Session not found" });
+      }
+
+      // 2) نجيب كل الـ cycles المفتوحة (مازال ما تسكرات)
+      const { data: openCycles, error: cErr } = await supabase
+         .from("nuc_cycles")
+         .select("id, session_id, closed_at")
+         .eq("session_id", session_id)
+         .is("closed_at", null)
+         .order("id", { ascending: true });
+
+      if (cErr) {
+         console.error("❌ Error fetching open cycles for control-summary:", cErr);
+         return res.status(400).json({ error: cErr.message });
+      }
+
+      if (!openCycles || openCycles.length === 0) {
+         return res
+            .status(400)
+            .json({ error: "Aucun essaim ouvert à contrôler pour cette session." });
+      }
+
+      const totalOpen = openCycles.length;
+
+      if (ok_count + reintroduce_count > totalOpen) {
+         return res.status(400).json({
+            error: "La somme ok_count + reintroduce_count dépasse le nombre d'essaims ouverts.",
+            total_open: totalOpen,
+         });
+      }
+
+      const now = new Date().toISOString();
+      const nextDue = ADD_DAYS(now, check_after_days);
+
+      // 3) نوزع الــ IDs حسب الأعداد
+      const okIds = openCycles.slice(0, ok_count).map((c) => c.id);
+      const reintroIds = openCycles.slice(ok_count, ok_count + reintroduce_count).map((c) => c.id);
+      const closeIds = openCycles.slice(ok_count + reintroduce_count).map((c) => c.id);
+
+      // 4) نحدّث مجموعة OK
+      let okUpdate = null;
+      if (okIds.length > 0) {
+         const { data, error } = await supabase
+            .from("nuc_cycles")
+            .update({
+               laying_status: "ok",
+               laying_checked_at: now,
+               closed_at: now,
+               check_due_at: null,
+            })
+            .in("id", okIds)
+            .select();
+         if (error) {
+            console.error("❌ Error updating OK cycles:", error);
+            return res.status(400).json({ error: error.message });
+         }
+         okUpdate = data;
+      }
+
+      // 5) مجموعة اللي حنرجعولها cellules (no_eggs + reintroduire)
+      let reintroUpdate = null;
+      if (reintroIds.length > 0) {
+         const { data, error } = await supabase
+            .from("nuc_cycles")
+            .update({
+               laying_status: "no_eggs",
+               laying_checked_at: now,
+               closed_at: null, // مازال مفتوح لأنه حنرجعولها cellule
+               cell_introduced_at: now, // إعادة إدخال cellule
+               check_due_at: nextDue, // contrôle جديد بعد X jours
+            })
+            .in("id", reintroIds)
+            .select();
+         if (error) {
+            console.error("❌ Error updating reintro cycles:", error);
+            return res.status(400).json({ error: error.message });
+         }
+         reintroUpdate = data;
+      }
+
+      // 6) الباقي → no_eggs + session close
+      let closeUpdate = null;
+      if (closeIds.length > 0) {
+         const { data, error } = await supabase
+            .from("nuc_cycles")
+            .update({
+               laying_status: "no_eggs",
+               laying_checked_at: now,
+               closed_at: now, // نغلق هذا essaim
+               check_due_at: null,
+            })
+            .in("id", closeIds)
+            .select();
+         if (error) {
+            console.error("❌ Error updating closed cycles:", error);
+            return res.status(400).json({ error: error.message });
+         }
+         closeUpdate = data;
+      }
+
+      // 7) نحدّث السشن نفسها (planning rucher)
+      let sessionUpdateFields = {};
+      if (reintroIds.length > 0) {
+         sessionUpdateFields.check_due_at = nextDue;
+      } else {
+         // ما فيش إعادة إدخال → نلغي موعد contrôle القادم
+         sessionUpdateFields.check_due_at = null;
+      }
+
+      const { data: updatedSession, error: uSessionErr } = await supabase
+         .from("nuc_sessions")
+         .update(sessionUpdateFields)
+         .eq("id", session_id)
+         .select()
+         .single();
+
+      if (uSessionErr) {
+         console.error("❌ Error updating session in control-summary:", uSessionErr);
+         return res.status(400).json({ error: uSessionErr.message });
+      }
+
+      return res.json({
+         ok: true,
+         session: updatedSession,
+         total_open: totalOpen,
+         applied: {
+            ok_count: okIds.length,
+            reintroduce_count: reintroIds.length,
+            closed_no_eggs_count: closeIds.length,
+         },
+         updated_groups: {
+            ok_cycles: okUpdate || [],
+            reintroduce_cycles: reintroUpdate || [],
+            closed_cycles: closeUpdate || [],
+         },
+      });
+   } catch (e) {
+      console.error("❌ Error in control-summary:", e);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 // DELETE /api/nuc-sessions/:id
 router.delete("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
