@@ -85,7 +85,7 @@ router.get("/:id", async (req, res) => {
    if (!id) return res.status(400).json({ error: "session id is required" });
 
    try {
-      // 1) جلب السشن
+      // 1) session
       const { data: session, error: sErr } = await supabase
          .from("nuc_sessions")
          .select("*")
@@ -97,7 +97,7 @@ router.get("/:id", async (req, res) => {
          return res.status(404).json({ error: "Session not found" });
       }
 
-      // 2) جلب الـ cycles
+      // 2) cycles
       const { data: cycles, error: cErr } = await supabase
          .from("nuc_cycles")
          .select(
@@ -130,7 +130,7 @@ router.get("/:id", async (req, res) => {
       if (hiveIds.length > 0) {
          const { data: hives, error: hErr } = await supabase
             .from("hives")
-            .select("hive_id, hive_code, name")
+            .select("hive_id, hive_code") // ✅ هنا التعديل
             .in("hive_id", hiveIds);
 
          console.log("DEBUG hives for nuc-session", { hives, hErr });
