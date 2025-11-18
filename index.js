@@ -74,6 +74,7 @@ app.use("/api/super-types", require("./routes/superTypes"));
 app.use("/api/hive-types", hiveTypesRoutes);
 app.use("/api/hive-purposes", hivePurposesRoutes);
 
+app.use("/api/nuc-sessions", require("./routes/nucSessions"));
 
 
 app.get("/", (req, res) => {
