@@ -76,6 +76,10 @@ router.get("/by-apiary/:apiaryId", async (req, res) => {
  * GET /api/nuc-sessions/:id
  * -> Get a session + its nuc cycles (with hive_code / ruchette info)
  */
+/**
+ * GET /api/nuc-sessions/:id
+ * -> Get a session + its nuc cycles (with hive_code / ruchette info)
+ */
 router.get("/:id", async (req, res) => {
    const id = Number(req.params.id);
    if (!id) return res.status(400).json({ error: "session id is required" });
@@ -89,10 +93,11 @@ router.get("/:id", async (req, res) => {
          .single();
 
       if (sErr || !session) {
+         console.error("❌ Session not found:", sErr);
          return res.status(404).json({ error: "Session not found" });
       }
 
-      // 2) جلب كل الـ cycles المرتبطة بالسشن
+      // 2) جلب الـ cycles
       const { data: cycles, error: cErr } = await supabase
          .from("nuc_cycles")
          .select(
@@ -100,21 +105,35 @@ router.get("/:id", async (req, res) => {
          )
          .eq("session_id", id);
 
-      if (cErr) return res.status(400).json({ error: cErr.message });
+      if (cErr) {
+         console.error("❌ Error loading cycles:", cErr);
+         return res.status(400).json({ error: cErr.message });
+      }
 
       let enrichedCycles = cycles || [];
 
-      // 3) استخرج كل hive_id للـ ruchettes
+      // 3) IDs متاع الخلايا
       const hiveIds = [
-         ...new Set(enrichedCycles.map((c) => c.ruchette_hive_id).filter((v) => v != null)),
+         ...new Set(
+            enrichedCycles
+               .map((c) => (c.ruchette_hive_id != null ? Number(c.ruchette_hive_id) : null))
+               .filter((v) => v != null && !Number.isNaN(v))
+         ),
       ];
 
+      console.log("DEBUG nuc-session", {
+         sessionId: id,
+         hiveIds,
+         cyclesCount: enrichedCycles.length,
+      });
+
       if (hiveIds.length > 0) {
-         // 4) جلب بيانات الخلايا مرة واحدة
          const { data: hives, error: hErr } = await supabase
             .from("hives")
             .select("hive_id, hive_code, name")
             .in("hive_id", hiveIds);
+
+         console.log("DEBUG hives for nuc-session", { hives, hErr });
 
          if (!hErr && hives) {
             const hiveMap = {};
@@ -122,13 +141,12 @@ router.get("/:id", async (req, res) => {
                hiveMap[h.hive_id] = h;
             });
 
-            // 5) ربط كل cycle بالـ hive الصحيح + hive_code
             enrichedCycles = enrichedCycles.map((c) => {
                const hive = hiveMap[c.ruchette_hive_id] || null;
                return {
                   ...c,
                   hive_code: hive?.hive_code || null,
-                  ruchette: hive || null, // حتى تشتغل مع الكود في الفرونت (ruchette?.hive_code)
+                  ruchette: hive || null,
                };
             });
          }
