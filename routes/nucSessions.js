@@ -72,19 +72,27 @@ router.get("/by-apiary/:apiaryId", async (req, res) => {
  * GET /api/nuc-sessions/:id
  * -> Get a session + its nuc cycles
  */
+/**
+ * GET /api/nuc-sessions/:id
+ * -> Get a session + its nuc cycles (with hive_code / ruchette info)
+ */
 router.get("/:id", async (req, res) => {
    const id = Number(req.params.id);
    if (!id) return res.status(400).json({ error: "session id is required" });
 
    try {
+      // 1) جلب السشن
       const { data: session, error: sErr } = await supabase
          .from("nuc_sessions")
          .select("*")
          .eq("id", id)
          .single();
 
-      if (sErr) return res.status(404).json({ error: "Session not found" });
+      if (sErr || !session) {
+         return res.status(404).json({ error: "Session not found" });
+      }
 
+      // 2) جلب كل الـ cycles المرتبطة بالسشن
       const { data: cycles, error: cErr } = await supabase
          .from("nuc_cycles")
          .select(
@@ -94,9 +102,41 @@ router.get("/:id", async (req, res) => {
 
       if (cErr) return res.status(400).json({ error: cErr.message });
 
+      let enrichedCycles = cycles || [];
+
+      // 3) استخرج كل hive_id للـ ruchettes
+      const hiveIds = [
+         ...new Set(enrichedCycles.map((c) => c.ruchette_hive_id).filter((v) => v != null)),
+      ];
+
+      if (hiveIds.length > 0) {
+         // 4) جلب بيانات الخلايا مرة واحدة
+         const { data: hives, error: hErr } = await supabase
+            .from("hives")
+            .select("hive_id, hive_code, name")
+            .in("hive_id", hiveIds);
+
+         if (!hErr && hives) {
+            const hiveMap = {};
+            hives.forEach((h) => {
+               hiveMap[h.hive_id] = h;
+            });
+
+            // 5) ربط كل cycle بالـ hive الصحيح + hive_code
+            enrichedCycles = enrichedCycles.map((c) => {
+               const hive = hiveMap[c.ruchette_hive_id] || null;
+               return {
+                  ...c,
+                  hive_code: hive?.hive_code || null,
+                  ruchette: hive || null, // حتى تشتغل مع الكود في الفرونت (ruchette?.hive_code)
+               };
+            });
+         }
+      }
+
       return res.json({
          session,
-         cycles: cycles || [],
+         cycles: enrichedCycles,
       });
    } catch (e) {
       console.error("❌ Error loading nuc session:", e);
