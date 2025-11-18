@@ -157,4 +157,35 @@ router.post("/:id/introduce-cells", async (req, res) => {
    }
 });
 
+// DELETE /api/nuc-sessions/:id
+router.delete("/:id", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+
+   try {
+      // Check if this session has any cycles
+      const { data: cycles, error: cErr } = await supabase
+         .from("nuc_cycles")
+         .select("id")
+         .eq("session_id", id)
+         .limit(1);
+
+      if (cErr) return res.status(400).json({ error: cErr.message });
+
+      if (cycles && cycles.length > 0) {
+         return res
+            .status(400)
+            .json({ error: "Cannot delete a session that already has nuc cycles." });
+      }
+
+      const { error: dErr } = await supabase.from("nuc_sessions").delete().eq("id", id);
+
+      if (dErr) return res.status(400).json({ error: dErr.message });
+
+      return res.json({ ok: true, deleted: true });
+   } catch (e) {
+      console.error("Error deleting nuc session:", e);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 module.exports = router;
