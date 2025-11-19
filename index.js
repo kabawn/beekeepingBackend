@@ -76,7 +76,7 @@ app.use("/api/hive-types", hiveTypesRoutes);
 app.use("/api/hive-purposes", hivePurposesRoutes);
 
 app.use("/api/nuc-sessions", require("./routes/nucSessions"));
-app.use("/interventions", interventionsRoutes);
+app.use("/api/interventions", interventionsRoutes);
 
 
 app.get("/", (req, res) => {
