@@ -169,7 +169,7 @@ router.post("/", async (req, res) => {
 
 /* ------------------------------------------------------------------
    GET /apiaries/:apiaryId/interventions
-   List interventions for one apiary
+   List interventions for one apiary (WITH hives)
 ------------------------------------------------------------------ */
 router.get("/apiaries/:apiaryId/interventions", async (req, res) => {
    try {
@@ -177,7 +177,18 @@ router.get("/apiaries/:apiaryId/interventions", async (req, res) => {
 
       const { data, error } = await supabase
          .from("interventions")
-         .select("*, intervention_types(*), products(*)")
+         .select(`
+            *,
+            intervention_types (*),
+            products (*),
+            intervention_hives (
+               hive_id,
+               qty_for_this_hive,
+               hives (
+                  hive_code
+               )
+            )
+         `)
          .eq("apiary_id", apiaryId)
          .order("date_time", { ascending: false });
 
@@ -200,7 +211,14 @@ router.get("/hives/:hiveId/interventions", async (req, res) => {
 
       const { data, error } = await supabase
          .from("intervention_hives")
-         .select("*, interventions(*), interventions(intervention_types(*), products(*))")
+         .select(`
+            *,
+            interventions (
+               *,
+               intervention_types (*),
+               products (*)
+            )
+         `)
          .eq("hive_id", hiveId)
          .order("created_at", { ascending: false });
 
