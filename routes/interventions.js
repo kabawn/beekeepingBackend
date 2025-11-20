@@ -5,6 +5,7 @@ const authenticateUser = require("../middlewares/authMiddleware");
 
 // Apply authentication to all routes
 router.use(authenticateUser);
+console.log("✅ Interventions router loaded (build: 2025-11-20-DEL-01)");
 
 /* ------------------------------------------------------------------
    GET /intervention-types
