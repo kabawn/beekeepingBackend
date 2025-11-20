@@ -231,4 +231,50 @@ router.get("/hives/:hiveId/interventions", async (req, res) => {
    }
 });
 
+
+/* ------------------------------------------------------------------
+   DELETE /:id
+   Delete one intervention + its linked hives
+------------------------------------------------------------------ */
+router.delete("/:id", async (req, res) => {
+   const { id } = req.params;
+   const userId = req.user.id; // from authenticateUser
+
+   try {
+      // 1) Delete linked hives rows (if any)
+      const { error: linkError } = await supabase
+         .from("intervention_hives")
+         .delete()
+         .eq("intervention_id", id);
+
+      if (linkError) throw linkError;
+
+      // 2) Delete the intervention itself (and ensure it belongs to this user)
+      const { data, error: delError } = await supabase
+         .from("interventions")
+         .delete()
+         .eq("id", id)
+         .eq("user_id", userId)
+         .select("*")
+         .single();
+
+      if (delError) {
+         // If no row found
+         if (delError.code === "PGRST116") {
+            return res.status(404).json({ error: "Intervention not found" });
+         }
+         throw delError;
+      }
+
+      return res.status(200).json({
+         message: "Intervention deleted successfully",
+         intervention: data,
+      });
+   } catch (err) {
+      console.error("❌ Error deleting intervention:", err);
+      return res.status(500).json({ error: "Failed to delete intervention" });
+   }
+});
+
+
 module.exports = router;
