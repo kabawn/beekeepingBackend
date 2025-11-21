@@ -15,15 +15,19 @@ router.post("/", authenticateUser, async (req, res) => {
       opalite_color,
       expected_traits,
       hive_id,
-      forceReplace = false, // 👈 READ this
+      forceReplace = false,
    } = req.body;
+
+   const userId = req.user.id; // 👈 المالك الحقيقي للملكة
 
    try {
       if (hive_id) {
+         // نتأكد أن هذه الخلية ليس لها ملكة لهذا المستخدم
          const { data: existingQueen, error: checkError } = await supabase
             .from("queens")
             .select("queen_id")
             .eq("hive_id", hive_id)
+            .eq("owner_user_id", userId) // 👈 مهم جداً
             .limit(1)
             .maybeSingle();
 
@@ -36,11 +40,12 @@ router.post("/", authenticateUser, async (req, res) => {
             if (!forceReplace) {
                return res.status(400).json({ error: "This hive already has a queen linked." });
             } else {
-               // ✅ Unlink old queen
+               // ✅ Unlink old queen (الخاصة بنفس المستخدم فقط)
                const { error: unlinkError } = await supabase
                   .from("queens")
                   .update({ hive_id: null })
-                  .eq("queen_id", existingQueen.queen_id);
+                  .eq("queen_id", existingQueen.queen_id)
+                  .eq("owner_user_id", userId);
 
                if (unlinkError) {
                   console.error("Error unlinking old queen:", unlinkError);
@@ -51,9 +56,18 @@ router.post("/", authenticateUser, async (req, res) => {
       }
 
       // ✅ Create new queen
-      const { data: allQueens } = await supabase.from("queens").select("queen_id");
-      const count = allQueens?.length || 0;
+      // نخلي الكود Q-001, Q-002 ... لكل مستخدم لوحده
+      const { data: allQueens, error: countError } = await supabase
+         .from("queens")
+         .select("queen_id")
+         .eq("owner_user_id", userId);
 
+      if (countError) {
+         console.error("Error counting queens:", countError);
+         return res.status(500).json({ error: "Failed to generate queen code" });
+      }
+
+      const count = allQueens?.length || 0;
       const queenCode = `Q-${String(count + 1).padStart(3, "0")}`;
       const publicKey = uuidv4();
 
@@ -68,6 +82,7 @@ router.post("/", authenticateUser, async (req, res) => {
                opalite_color,
                expected_traits,
                hive_id,
+               owner_user_id: userId, // 👈 ربط الملكة بالمستخدم
             },
          ])
          .select();
@@ -88,6 +103,7 @@ router.post("/", authenticateUser, async (req, res) => {
 });
 
 // 🖼️ تحميل صورة QR لملكة
+// هذا المسار ممكن يظل عام لأنه فقط لطباعة اللاصق
 router.get("/qr-download/:public_key", async (req, res) => {
    const { public_key } = req.params;
 
@@ -116,7 +132,7 @@ router.get("/qr-download/:public_key", async (req, res) => {
       ctx.fillStyle = "#000";
       ctx.font = "bold 20px Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`Ruche: ${queen.queen_code}`, 150, 300);
+      ctx.fillText(`Reine: ${queen.queen_code}`, 150, 300); // لو حاب تغير النص
       ctx.font = "16px Arial";
       ctx.fillText(queen.strain_name || "", 150, 340);
 
@@ -132,10 +148,13 @@ router.get("/qr-download/:public_key", async (req, res) => {
 
 // 📋 عرض جميع الملكات
 router.get("/", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+
    try {
       const { data, error } = await supabase
          .from("queens")
          .select("*")
+         .eq("owner_user_id", userId) // 👈 فقط ملكاتي
          .order("created_at", { ascending: false });
 
       if (error) return res.status(400).json({ error: error.message });
@@ -149,13 +168,15 @@ router.get("/", authenticateUser, async (req, res) => {
 // 🔍 جلب ملكة واحدة بالتفصيل
 router.get("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
+   const userId = req.user.id;
 
    try {
       const { data, error } = await supabase
          .from("queens")
          .select("*")
          .eq("queen_id", queen_id)
-         .single(); // Ensure it returns one row or 404
+         .eq("owner_user_id", userId) // 👈 تأمين
+         .single();
 
       if (error || !data) {
          return res.status(404).json({ error: "Queen not found" });
@@ -168,20 +189,25 @@ router.get("/:queen_id", authenticateUser, async (req, res) => {
    }
 });
 
-// ✏️ تحديث ملكة (ربطها بخلية أو تعديل بيانات)
 // ✏️ تحديث ملكة
 router.patch("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
    const updateFields = req.body;
+   const userId = req.user.id;
 
    try {
       const { data, error } = await supabase
          .from("queens")
          .update(updateFields)
          .eq("queen_id", queen_id)
+         .eq("owner_user_id", userId) // 👈 لا يمكن التعديل على ملكة شخص آخر
          .select();
 
       if (error) return res.status(400).json({ error: error.message });
+      if (!data || !data[0]) {
+         return res.status(404).json({ error: "Queen not found" });
+      }
+
       res.status(200).json({ message: "✅ Queen updated successfully", queen: data[0] });
    } catch (err) {
       console.error(err);
@@ -192,9 +218,14 @@ router.patch("/:queen_id", authenticateUser, async (req, res) => {
 // ❌ حذف ملكة
 router.delete("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
+   const userId = req.user.id;
 
    try {
-      const { error } = await supabase.from("queens").delete().eq("queen_id", queen_id);
+      const { error } = await supabase
+         .from("queens")
+         .delete()
+         .eq("queen_id", queen_id)
+         .eq("owner_user_id", userId); // 👈 لا يمكن حذف ملكة غيرك
 
       if (error) {
          console.error("Error deleting queen:", error);
