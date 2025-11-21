@@ -13,21 +13,19 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install Supabase CLI
+      - name: Install PostgreSQL client
         run: |
-          curl -L https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz -o supabase.tar.gz
-          tar -xzf supabase.tar.gz
-          sudo mv supabase /usr/local/bin/supabase
-          supabase --version
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
 
-      - name: Dump database
+      - name: Dump database with pg_dump
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
-          supabase db dump \
-            --db-url "postgres://postgres:${SUPABASE_DB_PASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres" \
-            > backup.sql
+          export PGURL="postgres://postgres:${SUPABASE_DB_PASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres"
+          echo "Connecting to: $PGURL"
+          pg_dump "$PGURL" --format=plain --no-owner --no-privileges > backup.sql
 
       - name: Upload backup as artifact
         uses: actions/upload-artifact@v4
