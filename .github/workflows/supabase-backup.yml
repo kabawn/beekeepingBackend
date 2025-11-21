@@ -18,13 +18,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client
 
-      - name: Dump database with pg_dump
+      - name: Dump database with pg_dump via pooler
         env:
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
-          export PGURL="postgres://postgres:${SUPABASE_DB_PASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres"
-          echo "Connecting to: $PGURL"
+          PGURL="postgresql://postgres.kjsxixfomskbzksbuyhn:${SUPABASE_DB_PASSWORD}@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+          echo "Connecting to pooler..."
           pg_dump "$PGURL" --format=plain --no-owner --no-privileges > backup.sql
 
       - name: Upload backup as artifact
