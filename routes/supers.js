@@ -178,11 +178,12 @@ router.post("/", authenticateUser, async (req, res) => {
          }
 
          // 1.b) Check that this public_key belongs to THIS user's label pack
+         // 1.b) Check that this public_key belongs to THIS user's label pack
          const { data: available, error: availErr } = await supabase
             .from("available_public_keys")
-            .select("id, code, user_id")
+            .select("id, code, owner_user_id") // 👈 use the real column name
             .eq("public_key", finalPublicKey)
-            .eq("user_id", owner_user_id) // 👈 very important: only my labels
+            .eq("owner_user_id", owner_user_id) // 👈 match on owner_user_id
             .maybeSingle();
 
          if (availErr) throw availErr;
