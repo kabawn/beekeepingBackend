@@ -159,6 +159,10 @@ router.post("/", authenticateUser, async (req, res) => {
 
    const owner_user_id = req.user.id; // ✅ authenticated user
 
+   // ✅ add this
+   const finalActive = typeof active === "boolean" ? active : true;
+   const finalServiceIn = typeof service_in === "boolean" ? service_in : true;
+
    try {
       let finalPublicKey = public_key ? String(public_key).trim() : null;
       let finalSuperCode = null;
@@ -297,8 +301,8 @@ router.post("/", authenticateUser, async (req, res) => {
                purpose_super,
                qr_code: qr_code || `https://yourapp.com/super/${finalPublicKey}`,
                weight_empty: finalWeightEmptyKg, // KG
-               active,
-               service_in,
+               active: finalActive, // ✅ always true if not sent
+               service_in: finalServiceIn, // ✅ always true if not sent
                hive_id: hive_id || null,
                public_key: finalPublicKey,
                owner_user_id, // tie to authenticated user
@@ -333,11 +337,22 @@ router.post("/batch", authenticateUser, async (req, res) => {
    const results = [];
 
    for (const row of items) {
-      const { public_key, super_type_name, purpose_super = "honey" } = row || {};
+      const {
+         public_key,
+         super_type_name,
+         purpose_super = "honey",
+         active,
+         service_in,
+      } = row || {};
+
       if (!public_key || !super_type_name) {
          results.push({ ok: false, public_key, error: "Missing public_key or super_type_name" });
          continue;
       }
+
+      // ✅ same logic as single create
+      const finalActive = typeof active === "boolean" ? active : true;
+      const finalServiceIn = typeof service_in === "boolean" ? service_in : true;
 
       try {
          // 1) Resolve super type (tare) for this user
@@ -377,7 +392,7 @@ router.post("/batch", authenticateUser, async (req, res) => {
 
          if (avail?.code) {
             finalSuperCode = String(avail.code).trim();
-            claimedAvailableId = avail.id; // we'll delete it AFTER successful insert
+            claimedAvailableId = avail.id;
          }
 
          // 4) If no code from available_public_keys → generate next sequential code
@@ -412,12 +427,12 @@ router.post("/batch", authenticateUser, async (req, res) => {
             .insert([
                {
                   super_code: finalSuperCode,
-                  super_type: st.name, // keep text label
+                  super_type: st.name,
                   purpose_super,
-                  qr_code: null, // your label QR just encodes the public_key
+                  qr_code: null,
                   weight_empty: Number(st.weight_empty_kg),
-                  active: true,
-                  service_in: true,
+                  active: finalActive, // ✅ default true if not sent
+                  service_in: finalServiceIn, // ✅ default true if not sent
                   hive_id: null,
                   public_key,
                   owner_user_id,
@@ -434,7 +449,6 @@ router.post("/batch", authenticateUser, async (req, res) => {
                .delete()
                .eq("id", claimedAvailableId);
             if (delErr) {
-               // Not fatal for the super creation, but report it
                results.push({
                   ok: true,
                   public_key,
