@@ -17,7 +17,7 @@ router.get("/", authenticateUser, async (req, res) => {
       let query = supabase
          .from("available_public_keys")
          .select("*")
-         .eq("user_id", userId) // 👈 only this user's stock
+         .eq("owner_user_id", userId) // 👈 use the REAL column name
          .order("id", { ascending: true });
 
       if (used === "true") query = query.eq("is_used", true);
@@ -47,16 +47,18 @@ router.post("/", authenticateUser, async (req, res) => {
          return res.status(400).json({ error: "Keys array is required" });
       }
 
-      // attach user_id to each key
+      // attach owner_user_id to each key (NOT user_id)
       const payload = keys.map((k) => ({
          ...k,
-         user_id: userId,
+         owner_user_id: userId,        // 👈 FIX HERE
          is_used: k.is_used ?? false,
          used_as: k.used_as ?? null,
          used_id: k.used_id ?? null,
       }));
 
-      const { data, error } = await supabase.from("available_public_keys").insert(payload);
+      const { data, error } = await supabase
+         .from("available_public_keys")
+         .insert(payload);
 
       if (error) throw error;
 
@@ -67,7 +69,7 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-// ✅ Mark a key as used (still implicitly scoped by RLS on user_id)
+// ✅ Mark a key as used
 router.patch("/:id/use", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const { used_as, used_id } = req.body; // used_as: 'hive' | 'super'
@@ -94,7 +96,6 @@ router.patch("/:id/use", authenticateUser, async (req, res) => {
 });
 
 // ✅ Resolve a public key → only if it belongs to THIS user
-// ✅ Resolve a public key → only if it belongs to THIS user
 router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
    const { public_key } = req.params;
    const userId = req.user?.id;
@@ -106,13 +107,13 @@ router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
    try {
       let apk = null;
 
-      // 1) Try available_public_keys for THIS user (but do NOT throw on error)
+      // 1) Try available_public_keys for THIS user
       try {
          const { data, error } = await supabase
             .from("available_public_keys")
-            .select("code, is_used, used_as, used_id, public_key")
+            .select("code, is_used, used_as, used_id, public_key, owner_user_id")
             .eq("public_key", public_key)
-            .eq("user_id", userId)
+            .eq("owner_user_id", userId) // 👈 FIX HERE
             .maybeSingle();
 
          if (error) {
@@ -141,7 +142,7 @@ router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
          });
       }
 
-      // 2) (Optional) Try supers – also NEVER throw, just log
+      // 2) Try supers
       try {
          const { data: s, error: sErr } = await supabase
             .from("supers")
@@ -157,25 +158,21 @@ router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
                code: sErr.code,
             });
          } else if (s && s.super_code) {
-            return res.status(200).json({
+           return res.status(200).json({
                source: "supers",
                public_key: s.public_key,
                code: String(s.super_code),
                exists: true,
                is_used: true,
-            });
+           });
          }
       } catch (e) {
          console.error("❌ supers query threw exception:", e);
       }
 
-      // 3) If we reach here, either:
-      //    - it's not in available_public_keys for this user
-      //    - and not in supers
-      //    - OR there was an error → we still answer "not found"
+      // 3) Not found
       return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
    } catch (err) {
-      // 🔥 SAFETY NET: even if something explodes above, we still return 404
       console.error("❌ /available-keys/resolve outer error:", err);
       return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
    }
@@ -192,7 +189,7 @@ router.get("/next-code", authenticateUser, async (req, res) => {
       const { data, error } = await supabase
          .from("available_public_keys")
          .select("*")
-         .eq("user_id", userId) // 👈 only this user's stock
+         .eq("owner_user_id", userId) // 👈 FIX HERE
          .eq("is_used", false)
          .order("id", { ascending: true })
          .limit(1)
