@@ -4,13 +4,20 @@ const router = express.Router();
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-// ✅ جلب كل المفاتيح المتاحة أو المستخدمة حسب الحاجة
+// ✅ Get all available keys for the CURRENT user
 router.get("/", authenticateUser, async (req, res) => {
    try {
       const { used } = req.query;
+      const userId = req.user?.id;
+
+      if (!userId) {
+         return res.status(401).json({ error: "Missing user in request" });
+      }
+
       let query = supabase
          .from("available_public_keys")
          .select("*")
+         .eq("user_id", userId) // 👈 only this user's stock
          .order("id", { ascending: true });
 
       if (used === "true") query = query.eq("is_used", true);
@@ -26,16 +33,31 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
-// ✅ إدخال مفاتيح جديدة (يمكن إدخال دفعة)
+// ✅ Insert new keys for CURRENT user (batch)
 router.post("/", authenticateUser, async (req, res) => {
    try {
+      const userId = req.user?.id;
+      if (!userId) {
+         return res.status(401).json({ error: "Missing user in request" });
+      }
+
       const keys = req.body.keys; // [{ public_key, code }, ...]
 
       if (!Array.isArray(keys) || keys.length === 0) {
          return res.status(400).json({ error: "Keys array is required" });
       }
 
-      const { data, error } = await supabase.from("available_public_keys").insert(keys);
+      // attach user_id to each key
+      const payload = keys.map((k) => ({
+         ...k,
+         user_id: userId,
+         is_used: k.is_used ?? false,
+         used_as: k.used_as ?? null,
+         used_id: k.used_id ?? null,
+      }));
+
+      const { data, error } = await supabase.from("available_public_keys").insert(payload);
+
       if (error) throw error;
 
       res.status(201).json({ message: "✅ Keys inserted", data });
@@ -45,7 +67,7 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-// ✅ استخدام مفتاح معين وربطه
+// ✅ Mark a key as used (still implicitly scoped by RLS on user_id)
 router.patch("/:id/use", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const { used_as, used_id } = req.body; // used_as: 'hive' | 'super'
@@ -71,64 +93,78 @@ router.patch("/:id/use", authenticateUser, async (req, res) => {
    }
 });
 
-// routes/availablePublicKeys.js
-// routes/availablePublicKeys.js
+// ✅ Resolve a public key → only if it belongs to THIS user
 router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
-  const { public_key } = req.params;
+   const { public_key } = req.params;
+   const userId = req.user?.id;
 
-  try {
-    // 1) Look in available_public_keys FIRST (we're in the "add" flow)
-    const { data: apk, error: aErr } = await supabase
-      .from("available_public_keys")
-      .select("code, is_used, used_as, used_id")
-      .eq("public_key", public_key)
-      .maybeSingle();
-    if (aErr) throw aErr;
+   if (!userId) {
+      return res.status(401).json({ error: "Missing user in request" });
+   }
 
-    if (apk?.code) {
-      const alreadyUsed = apk.is_used === true || !!apk.used_as || apk.used_id != null;
-      return res.status(200).json({
-        source: "available_public_keys",
-        public_key,
-        code: String(apk.code),   // ← the human label you want to show on scan
-        exists: true,             // ← IMPORTANT: it's found, so true
-        is_used: alreadyUsed,
-      });
-    }
+   try {
+      // 1) Look in available_public_keys for THIS user
+      const { data: apk, error: aErr } = await supabase
+         .from("available_public_keys")
+         .select("code, is_used, used_as, used_id, public_key")
+         .eq("public_key", public_key)
+         .eq("user_id", userId) // 👈 here is the key change
+         .maybeSingle();
 
-    // 2) Not in available_public_keys? Maybe it already became a super
-    const { data: s, error: sErr } = await supabase
-      .from("supers")
-      .select("super_code, public_key")
-      .eq("public_key", public_key)
-      .maybeSingle();
-    if (sErr) throw sErr;
+      if (aErr) throw aErr;
 
-    if (s?.super_code) {
-      return res.status(200).json({
-        source: "supers",
-        public_key: s.public_key,
-        code: String(s.super_code), // keep the same 'code' field name for the client
-        exists: true,
-        is_used: true,
-      });
-    }
+      if (apk?.code) {
+         const alreadyUsed = apk.is_used === true || !!apk.used_as || apk.used_id != null;
 
-    // 3) Nothing found anywhere
-    return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
-  } catch (err) {
-    console.error("❌ /available-keys/resolve failed:", err);
-    return res.status(500).json({ error: "Unexpected server error" });
-  }
+         return res.status(200).json({
+            source: "available_public_keys",
+            public_key: apk.public_key,
+            code: String(apk.code), // human label "44-47"
+            exists: true,
+            is_used: alreadyUsed,
+         });
+      }
+
+      // 2) Not in this user's available keys? Maybe already a super
+      // (optional: your RLS should already protect foreign data)
+      const { data: s, error: sErr } = await supabase
+         .from("supers")
+         .select("super_code, public_key")
+         .eq("public_key", public_key)
+         .maybeSingle();
+
+      if (sErr) throw sErr;
+
+      if (s?.super_code) {
+         return res.status(200).json({
+            source: "supers",
+            public_key: s.public_key,
+            code: String(s.super_code),
+            exists: true,
+            is_used: true,
+         });
+      }
+
+      // 3) Nothing found anywhere
+      return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
+   } catch (err) {
+      console.error("❌ /available-keys/resolve failed:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
 });
 
-
-// ✅ جلب أول كود غير مستخدم
+// ✅ Get FIRST unused code for THIS user
 router.get("/next-code", authenticateUser, async (req, res) => {
    try {
+      const userId = req.user?.id;
+      if (!userId) {
+         return res.status(401).json({ error: "Missing user in request" });
+      }
+
       const { data, error } = await supabase
          .from("available_public_keys")
          .select("*")
+         .eq("user_id", userId) // 👈 only this user's stock
          .eq("is_used", false)
          .order("id", { ascending: true })
          .limit(1)
@@ -145,4 +181,4 @@ router.get("/next-code", authenticateUser, async (req, res) => {
    }
 });
 
-module.exports = router;
+module.exports = 
