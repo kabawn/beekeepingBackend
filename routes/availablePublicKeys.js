@@ -181,4 +181,4 @@ router.get("/next-code", authenticateUser, async (req, res) => {
    }
 });
 
-module.exports = 
+module.exports = router;
