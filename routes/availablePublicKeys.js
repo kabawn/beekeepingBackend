@@ -94,6 +94,7 @@ router.patch("/:id/use", authenticateUser, async (req, res) => {
 });
 
 // ✅ Resolve a public key → only if it belongs to THIS user
+// ✅ Resolve a public key → only if it belongs to THIS user
 router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
    const { public_key } = req.params;
    const userId = req.user?.id;
@@ -103,53 +104,80 @@ router.get("/resolve/:public_key", authenticateUser, async (req, res) => {
    }
 
    try {
-      // 1) Look in available_public_keys for THIS user
-      const { data: apk, error: aErr } = await supabase
-         .from("available_public_keys")
-         .select("code, is_used, used_as, used_id, public_key")
-         .eq("public_key", public_key)
-         .eq("user_id", userId) // 👈 here is the key change
-         .maybeSingle();
+      let apk = null;
 
-      if (aErr) throw aErr;
+      // 1) Try available_public_keys for THIS user (but do NOT throw on error)
+      try {
+         const { data, error } = await supabase
+            .from("available_public_keys")
+            .select("code, is_used, used_as, used_id, public_key")
+            .eq("public_key", public_key)
+            .eq("user_id", userId)
+            .maybeSingle();
 
-      if (apk?.code) {
+         if (error) {
+            console.error("❌ available_public_keys query error:", {
+               message: error.message,
+               details: error.details,
+               hint: error.hint,
+               code: error.code,
+            });
+         } else {
+            apk = data;
+         }
+      } catch (e) {
+         console.error("❌ available_public_keys query threw exception:", e);
+      }
+
+      if (apk && apk.code) {
          const alreadyUsed = apk.is_used === true || !!apk.used_as || apk.used_id != null;
 
          return res.status(200).json({
             source: "available_public_keys",
             public_key: apk.public_key,
-            code: String(apk.code), // human label "44-47"
+            code: String(apk.code),
             exists: true,
             is_used: alreadyUsed,
          });
       }
 
-      // 2) Not in this user's available keys? Maybe already a super
-      // (optional: your RLS should already protect foreign data)
-      const { data: s, error: sErr } = await supabase
-         .from("supers")
-         .select("super_code, public_key")
-         .eq("public_key", public_key)
-         .maybeSingle();
+      // 2) (Optional) Try supers – also NEVER throw, just log
+      try {
+         const { data: s, error: sErr } = await supabase
+            .from("supers")
+            .select("super_code, public_key")
+            .eq("public_key", public_key)
+            .maybeSingle();
 
-      if (sErr) throw sErr;
-
-      if (s?.super_code) {
-         return res.status(200).json({
-            source: "supers",
-            public_key: s.public_key,
-            code: String(s.super_code),
-            exists: true,
-            is_used: true,
-         });
+         if (sErr) {
+            console.error("❌ supers query error:", {
+               message: sErr.message,
+               details: sErr.details,
+               hint: sErr.hint,
+               code: sErr.code,
+            });
+         } else if (s && s.super_code) {
+            return res.status(200).json({
+               source: "supers",
+               public_key: s.public_key,
+               code: String(s.super_code),
+               exists: true,
+               is_used: true,
+            });
+         }
+      } catch (e) {
+         console.error("❌ supers query threw exception:", e);
       }
 
-      // 3) Nothing found anywhere
+      // 3) If we reach here, either:
+      //    - it's not in available_public_keys for this user
+      //    - and not in supers
+      //    - OR there was an error → we still answer "not found"
       return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
    } catch (err) {
-      console.error("❌ /available-keys/resolve failed:", err);
-      return res.status(500).json({ error: "Unexpected server error" });
+      // 🔥 SAFETY NET: even if something explodes above, we still return 404
+      console.error("❌ /available-keys/resolve outer error:", err);
+      return res.status(404).json({ source: null, public_key, exists: false, is_used: false });
    }
 });
 
