@@ -7,7 +7,17 @@ const authenticateUser = require("../middlewares/authMiddleware");
 // إنشاء منحل جديد
 router.post("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
-   const { apiary_name, location, commune, department, land_owner_name, phone } = req.body;
+
+   // ✅ NEW: accept main_production from the body (optional)
+   const {
+      apiary_name,
+      location,
+      commune,
+      department,
+      land_owner_name,
+      phone,
+      main_production, // <-- NEW
+   } = req.body;
 
    try {
       // جلب نوع اشتراك المستخدم
@@ -34,12 +44,30 @@ router.post("/", authenticateUser, async (req, res) => {
          }
       }
 
-      // إنشاء المنحل
+      // ✅ UPDATED: insert main_production as well (with default 'honey' if not provided)
       const insertResult = await pool.query(
-         `INSERT INTO apiaries (apiary_name, location, commune, department, land_owner_name, phone, owner_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         `INSERT INTO apiaries (
+            apiary_name,
+            location,
+            commune,
+            department,
+            land_owner_name,
+            phone,
+            owner_user_id,
+            main_production
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
-         [apiary_name, location, commune, department, land_owner_name, phone, userId]
+         [
+            apiary_name,
+            location,
+            commune,
+            department,
+            land_owner_name,
+            phone,
+            userId,
+            main_production || "honey", // ✅ default if null/undefined
+         ]
       );
 
       return res.status(201).json({ apiary: insertResult.rows[0] });
@@ -71,12 +99,14 @@ router.get("/", authenticateUser, async (req, res) => {
          "SELECT * FROM apiaries WHERE owner_user_id = $1 ORDER BY apiary_id ASC",
          [userId]
       );
+      // NOTE: SELECT * already returns main_production if the column exists
       res.json({ apiaries: result.rows });
    } catch (error) {
       console.error("Error fetching apiaries for user:", error);
       res.status(500).json({ error: "Server error while fetching user apiaries" });
    }
 });
+
 // ✅ خلايا منحل معين
 router.get("/:id/hives", async (req, res) => {
    const { id } = req.params;
@@ -100,6 +130,7 @@ router.get("/:id", async (req, res) => {
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
+      // SELECT * already includes main_production
       res.json(result.rows[0]);
    } catch (error) {
       console.error("Error fetching apiary:", error);
@@ -108,11 +139,11 @@ router.get("/:id", async (req, res) => {
 });
 
 // ✅ تحديث منحل
-// ✅ تحديث منحل
 router.put("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user.id;
 
+   // ✅ NEW: accept main_production from body here as well
    const {
       apiary_name,
       location, // "lat,lng" نفس ما تخزّنها في الـ POST
@@ -120,9 +151,11 @@ router.put("/:id", authenticateUser, async (req, res) => {
       department,
       land_owner_name,
       phone,
+      main_production, // <-- NEW
    } = req.body;
 
    try {
+      // ✅ UPDATED: also update main_production
       const result = await pool.query(
          `UPDATE apiaries
           SET apiary_name = $1,
@@ -130,11 +163,22 @@ router.put("/:id", authenticateUser, async (req, res) => {
               commune = $3,
               department = $4,
               land_owner_name = $5,
-              phone = $6
-          WHERE apiary_id = $7
-          AND owner_user_id = $8
+              phone = $6,
+              main_production = $7
+          WHERE apiary_id = $8
+          AND owner_user_id = $9
           RETURNING *`,
-         [apiary_name, location, commune, department, land_owner_name, phone, id, userId]
+         [
+            apiary_name,
+            location,
+            commune,
+            department,
+            land_owner_name,
+            phone,
+            main_production || "honey", // ✅ keep a safe default
+            id,
+            userId,
+         ]
       );
 
       if (result.rows.length === 0) {
