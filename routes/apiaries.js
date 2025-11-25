@@ -112,14 +112,30 @@ router.get("/:id/hives/count", async (req, res) => {
    }
 });
 
-// 🟡 GET USER APIARIES
+// 🟡 GET USER APIARIES (with productions[])
 router.get("/", authenticateUser, async (req, res) => {
    try {
       const userId = req.user.id;
+
       const result = await pool.query(
-         "SELECT * FROM apiaries WHERE owner_user_id = $1 ORDER BY apiary_id ASC",
+         `
+         SELECT 
+            a.*,
+            COALESCE(
+               json_agg(p.production_type)
+                 FILTER (WHERE p.production_type IS NOT NULL AND p.is_active = TRUE),
+               '[]'
+            ) AS productions
+         FROM apiaries a
+         LEFT JOIN apiary_productions p
+           ON p.apiary_id = a.apiary_id
+         WHERE a.owner_user_id = $1
+         GROUP BY a.apiary_id
+         ORDER BY a.apiary_id ASC
+         `,
          [userId]
       );
+
       res.json({ apiaries: result.rows });
    } catch (error) {
       console.error("Error fetching apiaries for user:", error);
@@ -142,14 +158,32 @@ router.get("/:id/hives", async (req, res) => {
    }
 });
 
-// 🟡 GET ONE APIARY
+// 🟡 GET ONE APIARY (with productions[])
 router.get("/:id", async (req, res) => {
    const { id } = req.params;
    try {
-      const result = await pool.query("SELECT * FROM apiaries WHERE apiary_id = $1", [id]);
+      const result = await pool.query(
+         `
+         SELECT 
+            a.*,
+            COALESCE(
+               json_agg(p.production_type)
+                 FILTER (WHERE p.production_type IS NOT NULL AND p.is_active = TRUE),
+               '[]'
+            ) AS productions
+         FROM apiaries a
+         LEFT JOIN apiary_productions p
+           ON p.apiary_id = a.apiary_id
+         WHERE a.apiary_id = $1
+         GROUP BY a.apiary_id
+         `,
+         [id]
+      );
+
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
+
       res.json(result.rows[0]);
    } catch (error) {
       console.error("Error fetching apiary:", error);
@@ -170,7 +204,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
       land_owner_name,
       phone,
       main_production,
-      productions, // optional: if you want multi-edit later
+      productions, // optional multi-edit
    } = req.body;
 
    try {
@@ -197,7 +231,6 @@ router.put("/:id", authenticateUser, async (req, res) => {
 
       const apiary = result.rows[0];
 
-      // optional: update productions if provided
       if (Array.isArray(productions)) {
          const prodList = normalizeProductions(productions, safeMain);
 
