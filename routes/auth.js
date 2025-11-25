@@ -40,7 +40,6 @@ router.post("/signup", async (req, res) => {
    return res.status(201).json({ message: "✅ User created successfully", userId });
 });
 
-
 // ✅ تسجيل الدخول
 router.post("/login", async (req, res) => {
    const { email, password } = req.body;
@@ -84,6 +83,7 @@ router.post("/login", async (req, res) => {
 });
 
 // ✅ تحديث الـ access_token باستخدام refresh_token
+// ✅ تحديث الـ access_token باستخدام refresh_token
 router.post("/refresh", async (req, res) => {
    const { refresh_token } = req.body;
 
@@ -92,22 +92,37 @@ router.post("/refresh", async (req, res) => {
    }
 
    try {
-      const { data: refreshedSession, error: refreshError } = await supabase.auth.refreshSession({ refresh_token });
+      const { data, error: refreshError } = await supabase.auth.refreshSession({ refresh_token });
 
       if (refreshError) {
+         console.error("🔴 Supabase refresh error:", refreshError);
          return res.status(401).json({ error: refreshError.message });
       }
 
+      const { session, user } = data || {};
+
+      if (!session) {
+         console.error("🔴 No session in refresh response:", data);
+         return res.status(500).json({ error: "No session returned by Supabase" });
+      }
+
+      console.log("🔄 REFRESH DEBUG:", {
+         in_refresh_token: refresh_token?.slice(0, 12) + "...",
+         out_refresh_token: session.refresh_token
+            ? session.refresh_token.slice(0, 12) + "..."
+            : null,
+      });
+
       return res.status(200).json({
-         access_token: refreshedSession.session.access_token,
-         refresh_token: refreshedSession.session.refresh_token,
-         user: refreshedSession.session.user,
+         access_token: session.access_token,
+         // 👇 if Supabase doesn't send a new one, reuse the old
+         refresh_token: session.refresh_token || refresh_token,
+         user,
       });
    } catch (err) {
       console.error("Error refreshing token:", err);
       return res.status(500).json({ error: "Server error" });
    }
 });
-
 
 module.exports = router;
