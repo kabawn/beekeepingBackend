@@ -8,7 +8,7 @@ const authenticateUser = require("../middlewares/authMiddleware");
 router.post("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
-   // ✅ NEW: accept main_production from the body (optional)
+   // ✅ accept main_production from the body (optional)
    const {
       apiary_name,
       location,
@@ -44,7 +44,7 @@ router.post("/", authenticateUser, async (req, res) => {
          }
       }
 
-      // ✅ UPDATED: insert main_production as well (with default 'honey' if not provided)
+      // ✅ insert main_production (default 'honey' if not provided)
       const insertResult = await pool.query(
          `INSERT INTO apiaries (
             apiary_name,
@@ -66,11 +66,26 @@ router.post("/", authenticateUser, async (req, res) => {
             land_owner_name,
             phone,
             userId,
-            main_production || "honey", // ✅ default if null/undefined
+            main_production || "honey",
          ]
       );
 
-      return res.status(201).json({ apiary: insertResult.rows[0] });
+      const apiary = insertResult.rows[0];
+
+      // ✅ NEW: ensure default production is active in apiary_productions
+      try {
+         await pool.query(
+            `INSERT INTO apiary_productions (apiary_id, production_type)
+             VALUES ($1, $2)
+             ON CONFLICT DO NOTHING`,
+            [apiary.apiary_id, apiary.main_production || "honey"]
+         );
+      } catch (e) {
+         console.error("Error inserting default production for apiary:", e);
+         // we don't fail the whole request for this
+      }
+
+      return res.status(201).json({ apiary });
    } catch (error) {
       console.error("Error creating apiary:", error);
       return res.status(500).json({ error: "Server error while creating apiary" });
@@ -95,11 +110,27 @@ router.get("/:id/hives/count", async (req, res) => {
 router.get("/", authenticateUser, async (req, res) => {
    try {
       const userId = req.user.id;
+
+      // ✅ UPDATED: join with apiary_productions and aggregate list of active productions
       const result = await pool.query(
-         "SELECT * FROM apiaries WHERE owner_user_id = $1 ORDER BY apiary_id ASC",
+         `
+         SELECT 
+            a.*,
+            COALESCE(
+               json_agg(p.production_type) 
+                  FILTER (WHERE p.production_type IS NOT NULL AND p.is_active = TRUE),
+               '[]'
+            ) AS productions
+         FROM apiaries a
+         LEFT JOIN apiary_productions p 
+           ON p.apiary_id = a.apiary_id
+         WHERE a.owner_user_id = $1
+         GROUP BY a.apiary_id
+         ORDER BY a.apiary_id ASC
+         `,
          [userId]
       );
-      // NOTE: SELECT * already returns main_production if the column exists
+
       res.json({ apiaries: result.rows });
    } catch (error) {
       console.error("Error fetching apiaries for user:", error);
@@ -126,11 +157,29 @@ router.get("/:id/hives", async (req, res) => {
 router.get("/:id", async (req, res) => {
    const { id } = req.params;
    try {
-      const result = await pool.query("SELECT * FROM apiaries WHERE apiary_id = $1", [id]);
+      // ✅ UPDATED: also return the list of active productions for that apiary
+      const result = await pool.query(
+         `
+         SELECT 
+            a.*,
+            COALESCE(
+               json_agg(p.production_type) 
+                  FILTER (WHERE p.production_type IS NOT NULL AND p.is_active = TRUE),
+               '[]'
+            ) AS productions
+         FROM apiaries a
+         LEFT JOIN apiary_productions p 
+           ON p.apiary_id = a.apiary_id
+         WHERE a.apiary_id = $1
+         GROUP BY a.apiary_id
+         `,
+         [id]
+      );
+
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
-      // SELECT * already includes main_production
+
       res.json(result.rows[0]);
    } catch (error) {
       console.error("Error fetching apiary:", error);
@@ -143,7 +192,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user.id;
 
-   // ✅ NEW: accept main_production from body here as well
+   // ✅ accept main_production from body here as well
    const {
       apiary_name,
       location, // "lat,lng" نفس ما تخزّنها في الـ POST
@@ -151,11 +200,11 @@ router.put("/:id", authenticateUser, async (req, res) => {
       department,
       land_owner_name,
       phone,
-      main_production, // <-- NEW
+      main_production,
    } = req.body;
 
    try {
-      // ✅ UPDATED: also update main_production
+      // ✅ update apiary + main_production
       const result = await pool.query(
          `UPDATE apiaries
           SET apiary_name = $1,
@@ -175,7 +224,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
             department,
             land_owner_name,
             phone,
-            main_production || "honey", // ✅ keep a safe default
+            main_production || "honey",
             id,
             userId,
          ]
@@ -185,8 +234,22 @@ router.put("/:id", authenticateUser, async (req, res) => {
          return res.status(404).json({ error: "Apiary not found" });
       }
 
-      // خليه نفس ستايل الـ POST
-      res.json({ apiary: result.rows[0] });
+      const apiary = result.rows[0];
+
+      // ✅ OPTIONAL: sync apiary_productions with new main_production (only honey/swarm later if you want)
+      try {
+         await pool.query(
+            `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
+             VALUES ($1, $2, TRUE)
+             ON CONFLICT (apiary_id, production_type)
+             DO UPDATE SET is_active = TRUE, deactivated_at = NULL`,
+            [apiary.apiary_id, apiary.main_production || "honey"]
+         );
+      } catch (e) {
+         console.error("Error syncing main_production with apiary_productions:", e);
+      }
+
+      res.json({ apiary });
    } catch (error) {
       console.error("Error updating apiary:", error);
       res.status(500).json({ error: "Server error while updating apiary" });
