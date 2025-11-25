@@ -1,17 +1,23 @@
+// routes/apiaries.js
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-/**
- * 🐝 POST /apiaries
- * إنشاء منحل جديد (مع main_production + قائمة productions اختياري)
- */
+// 🧠 helper: normalize array of productions
+function normalizeProductions(raw, mainProd) {
+   if (Array.isArray(raw) && raw.length > 0) {
+      return [...new Set(raw.map((v) => String(v).toLowerCase()))];
+   }
+   if (mainProd) return [String(mainProd).toLowerCase()];
+   return ["honey"];
+}
+
+// 🟢 CREATE APIARY
 router.post("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
-   // ✅ نقبل main_production + productions (اختياري)
    const {
       apiary_name,
       location,
@@ -19,28 +25,23 @@ router.post("/", authenticateUser, async (req, res) => {
       department,
       land_owner_name,
       phone,
-      main_production, // قيمة واحدة رئيسية
-      productions, // 👈 NEW: array of production types (honey, swarm, queen_rearing, ...)
+      main_production, // string
+      productions, // array of strings (optional)
    } = req.body;
 
-   const safeMainProduction = main_production || "honey";
-
    try {
-      // جلب نوع اشتراك المستخدم
+      // 1) subscription
       const subResult = await pool.query(
          "SELECT plan_type FROM subscriptions WHERE user_id = $1 LIMIT 1",
          [userId]
       );
-
       const planType = subResult.rows[0]?.plan_type || "free";
 
-      // إذا كان الاشتراك free، نتحقق من عدد المناحل
       if (planType === "free") {
          const countResult = await pool.query(
             "SELECT COUNT(*) FROM apiaries WHERE owner_user_id = $1",
             [userId]
          );
-
          const apiaryCount = parseInt(countResult.rows[0].count, 10);
 
          if (apiaryCount >= 1) {
@@ -50,7 +51,10 @@ router.post("/", authenticateUser, async (req, res) => {
          }
       }
 
-      // ✅ نضيف المنحل مع main_production
+      // 2) main production
+      const safeMain = (main_production || "honey").toLowerCase();
+
+      // 3) insert apiary
       const insertResult = await pool.query(
          `INSERT INTO apiaries (
             apiary_name,
@@ -64,56 +68,37 @@ router.post("/", authenticateUser, async (req, res) => {
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
-         [
-            apiary_name,
-            location,
-            commune,
-            department,
-            land_owner_name,
-            phone,
-            userId,
-            safeMainProduction,
-         ]
+         [apiary_name, location, commune, department, land_owner_name, phone, userId, safeMain]
       );
 
       const apiary = insertResult.rows[0];
+      const apiaryId = apiary.apiary_id;
 
-      // ✅ نبني ليست نهائية لأنواع الإنتاج:
-      // - دايمًا نحط main_production
-      // - لو فيه productions من الجسم ندمجها
-      const prodListRaw = Array.isArray(productions) ? productions : [];
-      const allProductions = [safeMainProduction, ...prodListRaw]
-         .map((p) => String(p).trim())
-         .filter((p) => p.length > 0);
+      // 4) insert productions into apiary_productions
+      const prodList = normalizeProductions(productions, safeMain);
 
-      // نحذف التكرارات
-      const uniqueProductions = [...new Set(allProductions)];
-
-      // ✅ نضيف كل نوع إنتاج في apiary_productions
-      try {
-         for (const pType of uniqueProductions) {
-            await pool.query(
+      await Promise.all(
+         prodList.map((p) =>
+            pool.query(
                `INSERT INTO apiary_productions (apiary_id, production_type)
                 VALUES ($1, $2)
                 ON CONFLICT DO NOTHING`,
-               [apiary.apiary_id, pType]
-            );
-         }
-      } catch (e) {
-         console.error("Error inserting productions for apiary:", e);
-         // ما نطيحوش الطلب كامل على خاطر هذي
-      }
+               [apiaryId, p]
+            )
+         )
+      );
 
-      return res.status(201).json({ apiary });
+      return res.status(201).json({
+         apiary,
+         productions: prodList,
+      });
    } catch (error) {
       console.error("Error creating apiary:", error);
       return res.status(500).json({ error: "Server error while creating apiary" });
    }
 });
 
-/**
- * ✅ عدد الخلايا في منحل معين
- */
+// 🟡 HIVE COUNT
 router.get("/:id/hives/count", async (req, res) => {
    const { id } = req.params;
    try {
@@ -127,33 +112,14 @@ router.get("/:id/hives/count", async (req, res) => {
    }
 });
 
-/**
- * ✅ GET /apiaries
- * كل المناحل لمستخدم معيّن + قائمة productions النشيطة لكل منحل
- */
+// 🟡 GET USER APIARIES
 router.get("/", authenticateUser, async (req, res) => {
    try {
       const userId = req.user.id;
-
       const result = await pool.query(
-         `
-         SELECT 
-            a.*,
-            COALESCE(
-               json_agg(p.production_type) 
-                  FILTER (WHERE p.production_type IS NOT NULL AND p.is_active = TRUE),
-               '[]'
-            ) AS productions
-         FROM apiaries a
-         LEFT JOIN apiary_productions p 
-           ON p.apiary_id = a.apiary_id
-         WHERE a.owner_user_id = $1
-         GROUP BY a.apiary_id
-         ORDER BY a.apiary_id ASC
-         `,
+         "SELECT * FROM apiaries WHERE owner_user_id = $1 ORDER BY apiary_id ASC",
          [userId]
       );
-
       res.json({ apiaries: result.rows });
    } catch (error) {
       console.error("Error fetching apiaries for user:", error);
@@ -161,9 +127,7 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
-/**
- * ✅ خلايا منحل معين
- */
+// 🟡 HIVES FOR ONE APIARY
 router.get("/:id/hives", async (req, res) => {
    const { id } = req.params;
    try {
@@ -178,34 +142,14 @@ router.get("/:id/hives", async (req, res) => {
    }
 });
 
-/**
- * ✅ منحل واحد حسب ID + productions
- */
+// 🟡 GET ONE APIARY
 router.get("/:id", async (req, res) => {
    const { id } = req.params;
    try {
-      const result = await pool.query(
-         `
-         SELECT 
-            a.*,
-            COALESCE(
-               json_agg(p.production_type) 
-                  FILTER (WHERE p.production_type IS NOT NULL AND p.is_active = TRUE),
-               '[]'
-            ) AS productions
-         FROM apiaries a
-         LEFT JOIN apiary_productions p 
-           ON p.apiary_id = a.apiary_id
-         WHERE a.apiary_id = $1
-         GROUP BY a.apiary_id
-         `,
-         [id]
-      );
-
+      const result = await pool.query("SELECT * FROM apiaries WHERE apiary_id = $1", [id]);
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
-
       res.json(result.rows[0]);
    } catch (error) {
       console.error("Error fetching apiary:", error);
@@ -213,32 +157,25 @@ router.get("/:id", async (req, res) => {
    }
 });
 
-/**
- * ✅ PUT /apiaries/:id
- * تحديث منحل (مع main_production + إمكانية تعديل قائمة productions)
- *
- * لو تبعت productions (array) → نعتبرها "الحقيقة" ونزامن الجدول apiary_productions معها.
- * لو ما تبعتش productions → نحدّث غير main_production ونخلي الباقي كما هو.
- */
+// 🟠 UPDATE APIARY
 router.put("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user.id;
 
    const {
       apiary_name,
-      location, // "lat,lng" نفس ما تخزنها في الـ POST
+      location,
       commune,
       department,
       land_owner_name,
       phone,
       main_production,
-      productions, // 👈 NEW: نقدر نحدّث بها لائحة الإنتاج
+      productions, // optional: if you want multi-edit later
    } = req.body;
 
-   const safeMainProduction = main_production || "honey";
-
    try {
-      // ✅ نحدّث المنحل + main_production
+      const safeMain = (main_production || "honey").toLowerCase();
+
       const result = await pool.query(
          `UPDATE apiaries
           SET apiary_name = $1,
@@ -251,17 +188,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
           WHERE apiary_id = $8
           AND owner_user_id = $9
           RETURNING *`,
-         [
-            apiary_name,
-            location,
-            commune,
-            department,
-            land_owner_name,
-            phone,
-            safeMainProduction,
-            id,
-            userId,
-         ]
+         [apiary_name, location, commune, department, land_owner_name, phone, safeMain, id, userId]
       );
 
       if (result.rows.length === 0) {
@@ -270,40 +197,29 @@ router.put("/:id", authenticateUser, async (req, res) => {
 
       const apiary = result.rows[0];
 
-      // ✅ نبني الليست النهائية لأنواع الإنتاج
-      const prodListRaw = Array.isArray(productions) ? productions : [];
-      const allProductions = [safeMainProduction, ...prodListRaw]
-         .map((p) => String(p).trim())
-         .filter((p) => p.length > 0);
-      const uniqueProductions = [...new Set(allProductions)];
+      // optional: update productions if provided
+      if (Array.isArray(productions)) {
+         const prodList = normalizeProductions(productions, safeMain);
 
-      try {
-         // لو المستخدم بعث productions → نزامن الجدول apiary_productions
-         if (Array.isArray(productions)) {
-            // 1) نعطّل كل الأنواع اللي مش موجودة في uniqueProductions
-            await pool.query(
-               `UPDATE apiary_productions
-                SET is_active = FALSE,
-                    deactivated_at = NOW()
-                WHERE apiary_id = $1
-                AND production_type <> ALL($2::text[])`,
-               [apiary.apiary_id, uniqueProductions]
-            );
-         }
+         // deactivate old ones
+         await pool.query(
+            `UPDATE apiary_productions
+             SET is_active = FALSE, deactivated_at = now()
+             WHERE apiary_id = $1 AND is_active = TRUE`,
+            [id]
+         );
 
-         // 2) نفعّل/نضيف كل الأنواع الموجودة في uniqueProductions
-         for (const pType of uniqueProductions) {
-            await pool.query(
-               `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
-                VALUES ($1, $2, TRUE)
-                ON CONFLICT (apiary_id, production_type)
-                DO UPDATE SET is_active = TRUE, deactivated_at = NULL`,
-               [apiary.apiary_id, pType]
-            );
-         }
-      } catch (e) {
-         console.error("Error syncing productions for apiary:", e);
-         // ما نوقفوش الطلب الرئيسي
+         // insert new active ones
+         await Promise.all(
+            prodList.map((p) =>
+               pool.query(
+                  `INSERT INTO apiary_productions (apiary_id, production_type)
+                   VALUES ($1, $2)
+                   ON CONFLICT DO NOTHING`,
+                  [id, p]
+               )
+            )
+         );
       }
 
       res.json({ apiary });
@@ -313,10 +229,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
    }
 });
 
-/**
- * ✅ حذف منحل
- * (نفس اللي كان عندك، ما لمسناه باش ما نخربش أي شي في الفرونت)
- */
+// 🔴 DELETE APIARY
 router.delete("/:id", async (req, res) => {
    const { id } = req.params;
    try {
