@@ -356,6 +356,64 @@ router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, 
    }
 });
 
+// PATCH /swarm/colonies/:colonyId/status
+router.patch("/colonies/:colonyId/status", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { colonyId } = req.params;
+   const { status } = req.body || {};
+
+   // allowed statuses
+   const allowed = ["pending", "laying_ok", "failed", "queenless", "dead"];
+   if (!status || !allowed.includes(status)) {
+      return res.status(400).json({ error: "Invalid status" });
+   }
+
+   try {
+      // 1) Check colony belongs to this user
+      const { rows: colRows } = await pool.query(
+         `SELECT c.swarm_colony_id, c.apiary_id
+          FROM swarm_colonies c
+          JOIN apiaries a ON a.apiary_id = c.apiary_id
+          WHERE c.swarm_colony_id = $1
+            AND a.owner_user_id = $2`,
+         [colonyId, userId]
+      );
+
+      if (!colRows.length) {
+         return res.status(404).json({ error: "Colony not found" });
+      }
+
+      // 2) Update colony status
+      const { rows: updatedRows } = await pool.query(
+         `UPDATE swarm_colonies
+          SET status = $1,
+              updated_at = now()
+          WHERE swarm_colony_id = $2
+          RETURNING *`,
+         [status, colonyId]
+      );
+
+      const colony = updatedRows[0];
+
+      // 3) Optionally close the check_laying alert (if exists)
+      await pool.query(
+         `UPDATE swarm_alerts
+          SET is_done = TRUE,
+              done_at = now(),
+              updated_at = now()
+          WHERE swarm_colony_id = $1
+            AND alert_type = 'check_laying'
+            AND is_done = FALSE`,
+         [colonyId]
+      );
+
+      return res.json({ ok: true, colony });
+   } catch (err) {
+      console.error("🔴 PATCH /swarm/colonies/:colonyId/status error:", err);
+      return res.status(500).json({ error: "Server error" });
+   }
+});
+
 // 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
 router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    const userId = req.user.id;
