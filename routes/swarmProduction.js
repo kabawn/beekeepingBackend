@@ -415,6 +415,7 @@ router.patch("/colonies/:colonyId/status", authenticateUser, async (req, res) =>
 });
 
 // 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
+// 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
 router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { sessionId } = req.params;
@@ -429,9 +430,16 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
              c.*,
              h.hive_code,
              h.hive_type,
-             h.hive_purpose
+             h.hive_purpose,
+             a.planned_for,
+             -- nombre de jours restants jusqu'au contrôle de ponte
+             (a.planned_for::date - NOW()::date) AS days_to_check
           FROM swarm_colonies c
           JOIN hives h ON h.hive_id = c.hive_id
+          LEFT JOIN swarm_alerts a
+             ON a.swarm_colony_id = c.swarm_colony_id
+            AND a.alert_type = 'check_laying'
+            AND a.is_done = FALSE
           WHERE c.swarm_session_id = $1
           ORDER BY c.started_at DESC`,
          [sessionId]
