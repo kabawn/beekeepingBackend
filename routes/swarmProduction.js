@@ -4,13 +4,12 @@ const router = express.Router();
 const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-// Helper: check that apiary belongs to user
-// Helper: check that apiary belongs to user
-async function assertApiaryOwnership(apiaryId, userId) {
-   const numericId = parseInt(apiaryId, 10);
-   console.log("🟣 assertApiaryOwnership called with:", { apiaryId, numericId, userId });
+// 🔹 Helper: check that apiary belongs to user (uses ONLY apiary_id)
+async function assertApiaryOwnership(apiaryIdParam, userId) {
+   const apiaryId = parseInt(apiaryIdParam, 10);
+   console.log("🟣 assertApiaryOwnership", { apiaryIdParam, apiaryId, userId });
 
-   if (!Number.isInteger(numericId)) {
+   if (!Number.isInteger(apiaryId)) {
       const err = new Error("Invalid apiary id");
       err.status = 400;
       throw err;
@@ -21,7 +20,7 @@ async function assertApiaryOwnership(apiaryId, userId) {
        FROM apiaries
        WHERE apiary_id = $1
          AND owner_user_id = $2`,
-      [numericId, userId]
+      [apiaryId, userId]
    );
 
    console.log("🟣 assertApiaryOwnership rows:", rows);
@@ -35,8 +34,17 @@ async function assertApiaryOwnership(apiaryId, userId) {
    return rows[0].apiary_id; // always the real apiary_id
 }
 
-// Helper: get a session by id + user check
-async function getUserSessionById(sessionId, userId) {
+// 🔹 Helper: get a swarm session by id + check user
+async function getUserSessionById(sessionIdParam, userId) {
+   const sessionId = parseInt(sessionIdParam, 10);
+   console.log("🟣 getUserSessionById", { sessionIdParam, sessionId, userId });
+
+   if (!Number.isInteger(sessionId)) {
+      const err = new Error("Invalid swarm session id");
+      err.status = 400;
+      throw err;
+   }
+
    const { rows } = await pool.query(
       `SELECT s.*
        FROM swarm_sessions s
@@ -45,6 +53,7 @@ async function getUserSessionById(sessionId, userId) {
          AND a.owner_user_id = $2`,
       [sessionId, userId]
    );
+
    if (!rows.length) {
       const err = new Error("Swarm session not found");
       err.status = 404;
@@ -53,21 +62,20 @@ async function getUserSessionById(sessionId, userId) {
    return rows[0];
 }
 
-// POST /swarm/sessions
+// 🔹 POST /swarm/sessions  → start a swarm session on an apiary
 router.post("/sessions", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { apiary_id, label } = req.body || {};
-   console.log("🟢 [POST /swarm/sessions] user:", userId, "apiary:", apiary_id, "label:", label);
+   console.log("🟢 [POST /swarm/sessions]", { userId, apiary_id, label });
 
    if (!apiary_id) {
       return res.status(400).json({ error: "apiary_id is required" });
    }
 
    try {
-      // This will work with both apiary_id or id in the table
       const resolvedApiaryId = await assertApiaryOwnership(apiary_id, userId);
 
-      // Optional: automatically close any other active session on this apiary
+      // Close any other active session on this apiary
       await pool.query(
          `UPDATE swarm_sessions
           SET is_active = FALSE, ended_at = now(), updated_at = now()
@@ -75,6 +83,7 @@ router.post("/sessions", authenticateUser, async (req, res) => {
          [resolvedApiaryId]
       );
 
+      // ⚠️ Only use owner_user_id if this column exists in your table
       const { rows } = await pool.query(
          `INSERT INTO swarm_sessions (
             owner_user_id, apiary_id, label
@@ -93,7 +102,7 @@ router.post("/sessions", authenticateUser, async (req, res) => {
    }
 });
 
-// POST /swarm/sessions/:sessionId/scan
+// 🔹 POST /swarm/sessions/:sessionId/scan  → add hive to this swarm session
 // Body can be:
 //   { "hive_id": 22 }
 // or
@@ -189,10 +198,12 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
    }
 });
 
-// GET /swarm/sessions/:sessionId
+// 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
 router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { sessionId } = req.params;
+
+   console.log("🟢 [GET /swarm/sessions/:sessionId]", { userId, sessionId });
 
    try {
       const session = await getUserSessionById(sessionId, userId);
@@ -226,7 +237,7 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    }
 });
 
-// GET /swarm/apiaries/:apiaryId/active
+// 🔹 GET /swarm/apiaries/:apiaryId/active  → get active session (or null) for an apiary
 router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { apiaryId } = req.params;
@@ -253,7 +264,7 @@ router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
 
       if (!session) {
          console.log("🟢 No active swarm session for apiary:", resolvedApiaryId);
-         return res.json({ session: null });
+         return res.json({ session: null }); // 200 with null
       }
 
       console.log("🟢 Active swarm session found:", session.swarm_session_id);
