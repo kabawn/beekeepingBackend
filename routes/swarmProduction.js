@@ -5,15 +5,23 @@ const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 
 // Helper: check that apiary belongs to user
+// Helper: check that apiary belongs to user
 async function assertApiaryOwnership(apiaryId, userId) {
-   console.log("🟣 assertApiaryOwnership called with:", { apiaryId, userId });
+   const numericId = parseInt(apiaryId, 10);
+   console.log("🟣 assertApiaryOwnership called with:", { apiaryId, numericId, userId });
+
+   if (!Number.isInteger(numericId)) {
+      const err = new Error("Invalid apiary id");
+      err.status = 400;
+      throw err;
+   }
 
    const { rows } = await pool.query(
-      `SELECT apiary_id, id
+      `SELECT apiary_id
        FROM apiaries
-       WHERE (apiary_id = $1 OR id = $1)
+       WHERE apiary_id = $1
          AND owner_user_id = $2`,
-      [apiaryId, userId]
+      [numericId, userId]
    );
 
    console.log("🟣 assertApiaryOwnership rows:", rows);
@@ -24,9 +32,7 @@ async function assertApiaryOwnership(apiaryId, userId) {
       throw err;
    }
 
-   // Return the real apiary_id to use consistently
-   const row = rows[0];
-   return row.apiary_id || row.id;
+   return rows[0].apiary_id; // always the real apiary_id
 }
 
 // Helper: get a session by id + user check
@@ -131,9 +137,7 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
          );
 
          if (!hiveRows.length) {
-            return res
-               .status(404)
-               .json({ error: "Hive not found for this public_key" });
+            return res.status(404).json({ error: "Hive not found for this public_key" });
          }
 
          resolvedHiveId = hiveRows[0].hive_id;
