@@ -648,4 +648,54 @@ router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
    }
 });
 
+// 🔹 GET /swarm/alerts/upcoming?days=14
+// Returns upcoming laying-check alerts for this user (and a bit of late ones)
+router.get("/alerts/upcoming", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const daysAhead = Number(req.query.days) || 14; // how far in future
+   const daysPast = 7; // how far in the past we still show late alerts
+
+   console.log("🟢 [GET /swarm/alerts/upcoming]", { userId, daysAhead, daysPast });
+
+   try {
+      const { rows } = await pool.query(
+         `
+         SELECT 
+            sa.swarm_alert_id,
+            sa.alert_type,
+            sa.planned_for,
+            a.apiary_id,
+            a.apiary_name,
+            c.swarm_colony_id,
+            h.hive_id,
+            h.hive_code,
+            h.hive_type,
+            h.hive_purpose,
+            -- days_to_check > 0  => in X days
+            -- days_to_check = 0  => today
+            -- days_to_check < 0  => late by |X|
+            DATE_PART('day', sa.planned_for::date - now()::date) AS days_to_check
+         FROM swarm_alerts sa
+         JOIN apiaries a       ON a.apiary_id = sa.apiary_id
+         JOIN swarm_colonies c ON c.swarm_colony_id = sa.swarm_colony_id
+         JOIN hives h          ON h.hive_id = c.hive_id
+         WHERE sa.owner_user_id = $1
+           AND sa.alert_type = 'check_laying'
+           AND sa.is_done = FALSE
+           -- keep late alerts but not older than daysPast
+           AND sa.planned_for::date >= (now()::date - $3 * INTERVAL '1 day')
+           -- and only up to daysAhead in the future
+           AND sa.planned_for::date <= (now()::date + $2 * INTERVAL '1 day')
+         ORDER BY sa.planned_for ASC, a.apiary_name, h.hive_code
+         `,
+         [userId, daysAhead, daysPast]
+      );
+
+      return res.json({ alerts: rows });
+   } catch (err) {
+      console.error("🔴 GET /swarm/alerts/upcoming error:", err);
+      return res.status(500).json({ error: "Server error" });
+   }
+});
+
 module.exports = router;
