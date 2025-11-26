@@ -294,7 +294,6 @@ router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, 
 
       const eventDate = date ? new Date(date) : new Date();
 
-      // 3️⃣ For each colony → event + status + alert
       const results = [];
 
       for (const row of colonies) {
@@ -330,14 +329,15 @@ router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, 
 
          await pool.query(
             `INSERT INTO swarm_alerts (
+               owner_user_id,
                apiary_id,
                swarm_colony_id,
                alert_type,
                planned_for,
                is_done
             )
-            VALUES ($1, $2, 'check_laying', $3, FALSE)`,
-            [apiaryId, colId, planned]
+            VALUES ($1, $2, $3, 'check_laying', $4, FALSE)`,
+            [userId, apiaryId, colId, planned]
          );
 
          results.push({ swarm_colony_id: colId });
