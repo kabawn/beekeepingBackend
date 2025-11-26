@@ -6,17 +6,27 @@ const authenticateUser = require("../middlewares/authMiddleware");
 
 // Helper: check that apiary belongs to user
 async function assertApiaryOwnership(apiaryId, userId) {
+   console.log("🟣 assertApiaryOwnership called with:", { apiaryId, userId });
+
    const { rows } = await pool.query(
-      `SELECT apiary_id
+      `SELECT apiary_id, id
        FROM apiaries
-       WHERE apiary_id = $1 AND owner_user_id = $2`,
+       WHERE (apiary_id = $1 OR id = $1)
+         AND owner_user_id = $2`,
       [apiaryId, userId]
    );
+
+   console.log("🟣 assertApiaryOwnership rows:", rows);
+
    if (!rows.length) {
       const err = new Error("Apiary not found or not yours");
       err.status = 404;
       throw err;
    }
+
+   // Return the real apiary_id to use consistently
+   const row = rows[0];
+   return row.apiary_id || row.id;
 }
 
 // Helper: get a session by id + user check
@@ -48,14 +58,15 @@ router.post("/sessions", authenticateUser, async (req, res) => {
    }
 
    try {
-      await assertApiaryOwnership(apiary_id, userId);
+      // This will work with both apiary_id or id in the table
+      const resolvedApiaryId = await assertApiaryOwnership(apiary_id, userId);
 
       // Optional: automatically close any other active session on this apiary
       await pool.query(
          `UPDATE swarm_sessions
           SET is_active = FALSE, ended_at = now(), updated_at = now()
           WHERE apiary_id = $1 AND is_active = TRUE AND ended_at IS NULL`,
-         [apiary_id]
+         [resolvedApiaryId]
       );
 
       const { rows } = await pool.query(
@@ -64,12 +75,14 @@ router.post("/sessions", authenticateUser, async (req, res) => {
           )
           VALUES ($1, $2, $3)
           RETURNING *`,
-         [userId, apiary_id, label || null]
+         [userId, resolvedApiaryId, label || null]
       );
+
+      console.log("🟢 [POST /swarm/sessions] created:", rows[0]);
 
       return res.status(201).json(rows[0]);
    } catch (err) {
-      console.error("POST /swarm/sessions error:", err);
+      console.error("🔴 POST /swarm/sessions error:", err);
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
@@ -118,7 +131,9 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
          );
 
          if (!hiveRows.length) {
-            return res.status(404).json({ error: "Hive not found for this public_key" });
+            return res
+               .status(404)
+               .json({ error: "Hive not found for this public_key" });
          }
 
          resolvedHiveId = hiveRows[0].hive_id;
@@ -128,7 +143,6 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
          return res.status(400).json({ error: "Could not resolve hive_id" });
       }
 
-      // Insert colony
       const { rows: colonyRows } = await pool.query(
          `INSERT INTO swarm_colonies (
             owner_user_id,
@@ -144,7 +158,6 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
 
       const colony = colonyRows[0];
 
-      // Add event: scan_arrival
       await pool.query(
          `INSERT INTO swarm_events (
             owner_user_id,
@@ -163,14 +176,15 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
          ]
       );
 
+      console.log("🟢 [SCAN] colony created:", colony);
+
       return res.status(201).json(colony);
    } catch (err) {
-      console.error("POST /swarm/sessions/:sessionId/scan error:", err);
+      console.error("🔴 POST /swarm/sessions/:sessionId/scan error:", err);
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
 
-// GET /swarm/sessions/:sessionId
 // GET /swarm/sessions/:sessionId
 router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    const userId = req.user.id;
@@ -192,7 +206,6 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
          [sessionId]
       );
 
-      // Small stats by status
       const stats = colonies.reduce(
          (acc, col) => {
             acc.total += 1;
@@ -204,7 +217,7 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
 
       return res.json({ session, colonies, stats });
    } catch (err) {
-      console.error("GET /swarm/sessions/:sessionId error:", err);
+      console.error("🔴 GET /swarm/sessions/:sessionId error:", err);
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
@@ -214,8 +227,10 @@ router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { apiaryId } = req.params;
 
+   console.log("🟢 [GET /swarm/apiaries/:apiaryId/active]", { apiaryId, userId });
+
    try {
-      await assertApiaryOwnership(apiaryId, userId);
+      const resolvedApiaryId = await assertApiaryOwnership(apiaryId, userId);
 
       const { rows } = await pool.query(
          `SELECT s.*
@@ -227,22 +242,22 @@ router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
             AND s.ended_at IS NULL
           ORDER BY s.started_at DESC
           LIMIT 1`,
-         [apiaryId, userId]
+         [resolvedApiaryId, userId]
       );
 
       const session = rows[0] || null;
 
       if (!session) {
+         console.log("🟢 No active swarm session for apiary:", resolvedApiaryId);
          return res.json({ session: null });
       }
 
-      // Optionally fetch colonies + stats directly here (but for clarity, frontend will call /sessions/:id)
+      console.log("🟢 Active swarm session found:", session.swarm_session_id);
       return res.json({ session });
    } catch (err) {
-      console.error("GET /swarm/apiaries/:apiaryId/active error:", err);
+      console.error("🔴 GET /swarm/apiaries/:apiaryId/active error:", err);
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
-
 
 module.exports = router;
