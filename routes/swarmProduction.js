@@ -453,6 +453,47 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    }
 });
 
+// PATCH /swarm/sessions/:sessionId/end  → close an active swarm session
+router.patch("/sessions/:sessionId/end", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { sessionId } = req.params;
+
+   console.log("🟢 [PATCH /swarm/sessions/:sessionId/end]", { userId, sessionId });
+
+   try {
+      // 1️⃣ Check session belongs to this user
+      const session = await getUserSessionById(sessionId, userId);
+
+      // 2️⃣ Already ended?
+      if (!session.is_active || session.ended_at) {
+         return res
+            .status(400)
+            .json({ error: "This swarm session is already closed or inactive." });
+      }
+
+      // 3️⃣ Close the session
+      const { rows } = await pool.query(
+         `UPDATE swarm_sessions
+          SET is_active = FALSE,
+              ended_at = now(),
+              updated_at = now()
+          WHERE swarm_session_id = $1
+          RETURNING *`,
+         [sessionId]
+      );
+
+      const closed = rows[0];
+      console.log("🟢 Swarm session ended:", closed.swarm_session_id);
+
+      // (optional TODO later: close related open alerts, etc.)
+
+      return res.json({ ok: true, session: closed });
+   } catch (err) {
+      console.error("🔴 PATCH /swarm/sessions/:sessionId/end error:", err);
+      return res.status(err.status || 500).json({ error: err.message || "Server error" });
+   }
+});
+
 // 🔹 GET /swarm/apiaries/:apiaryId/active  → get active session (or null) for an apiary
 router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
    const userId = req.user.id;
