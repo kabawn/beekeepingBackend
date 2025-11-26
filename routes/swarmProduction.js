@@ -107,6 +107,10 @@ router.post("/sessions", authenticateUser, async (req, res) => {
 //   { "hive_id": 22 }
 // or
 //   { "hive_public_key": "e26add9c-..." }
+// Body can be:
+//   { "hive_id": 22 }
+// or
+//   { "hive_public_key": "e26add9c-..." }
 router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { sessionId } = req.params;
@@ -124,6 +128,7 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
    }
 
    try {
+      // 1) Make sure session belongs to this user
       const session = await getUserSessionById(sessionId, userId);
 
       if (!session.is_active || session.ended_at) {
@@ -132,30 +137,54 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
 
       const apiaryId = session.apiary_id;
 
-      // 🔍 Resolve hive_id if we only have hive_public_key
+      // 2) Resolve hive_id
       let resolvedHiveId = hive_id || null;
 
       if (!resolvedHiveId && hive_public_key) {
+         // 🔍 Resolve by public_key + enforce owner + SAME APIARY
          const { rows: hiveRows } = await pool.query(
             `SELECT h.hive_id
              FROM hives h
              JOIN apiaries a ON a.apiary_id = h.apiary_id
              WHERE h.public_key = $1
-               AND a.owner_user_id = $2`,
-            [hive_public_key, userId]
+               AND h.apiary_id = $2         
+               AND a.owner_user_id = $3`,
+            [hive_public_key, apiaryId, userId]
          );
 
          if (!hiveRows.length) {
-            return res.status(404).json({ error: "Hive not found for this public_key" });
+            return res
+               .status(404)
+               .json({ error: "Hive not found in this apiary for this user (public_key)." });
          }
 
          resolvedHiveId = hiveRows[0].hive_id;
+      }
+
+      // If we got hive_id directly from frontend, still enforce owner + apiary
+      if (resolvedHiveId) {
+         const { rows: hiveCheck } = await pool.query(
+            `SELECT h.hive_id
+             FROM hives h
+             JOIN apiaries a ON a.apiary_id = h.apiary_id
+             WHERE h.hive_id = $1
+               AND h.apiary_id = $2        -- same apiary as the session
+               AND a.owner_user_id = $3`,
+            [resolvedHiveId, apiaryId, userId]
+         );
+
+         if (!hiveCheck.length) {
+            return res.status(404).json({
+               error: "Hive not found in this apiary for this user (invalid hive_id).",
+            });
+         }
       }
 
       if (!resolvedHiveId) {
          return res.status(400).json({ error: "Could not resolve hive_id" });
       }
 
+      // 3) Insert colony
       const { rows: colonyRows } = await pool.query(
          `INSERT INTO swarm_colonies (
             owner_user_id,
@@ -171,6 +200,7 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
 
       const colony = colonyRows[0];
 
+      // 4) Add event: scan_arrival
       await pool.query(
          `INSERT INTO swarm_events (
             owner_user_id,
@@ -194,6 +224,13 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
       return res.status(201).json(colony);
    } catch (err) {
       console.error("🔴 POST /swarm/sessions/:sessionId/scan error:", err);
+
+      if (err.code === "23503" && err.constraint === "swarm_colonies_hive_fk") {
+         return res.status(400).json({
+            error: "This hive does not exist in your database (invalid hive_id).",
+         });
+      }
+
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
