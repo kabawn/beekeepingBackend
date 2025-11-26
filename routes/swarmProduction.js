@@ -494,6 +494,114 @@ router.patch("/sessions/:sessionId/end", authenticateUser, async (req, res) => {
    }
 });
 
+// POST /swarm/colonies/:colonyId/reintroductions
+// Body: { type: "cell" | "virgin" | "mated", date? }
+router.post("/colonies/:colonyId/reintroductions", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { colonyId } = req.params;
+   const { type, date } = req.body || {};
+
+   console.log("🟢 [POST /swarm/colonies/:colonyId/reintroductions]", {
+      userId,
+      colonyId,
+      type,
+      date,
+   });
+
+   const allowedTypes = ["cell", "virgin", "mated"];
+   if (!allowedTypes.includes(type)) {
+      return res.status(400).json({ error: "Invalid type. Must be 'cell', 'virgin' or 'mated'." });
+   }
+
+   const delayDays = INTRO_DELAY_DAYS[type];
+   if (!delayDays) {
+      return res.status(500).json({ error: "No delay configured for this type." });
+   }
+
+   try {
+      // 1️⃣ Check colony belongs to user and get apiary_id + current status
+      const { rows: colRows } = await pool.query(
+         `SELECT c.swarm_colony_id, c.apiary_id, c.status
+          FROM swarm_colonies c
+          JOIN apiaries a ON a.apiary_id = c.apiary_id
+          WHERE c.swarm_colony_id = $1
+            AND a.owner_user_id = $2`,
+         [colonyId, userId]
+      );
+
+      if (!colRows.length) {
+         return res.status(404).json({ error: "Colony not found" });
+      }
+
+      const colony = colRows[0];
+
+      // we only allow re-intro on failed / queenless
+      if (!["failed", "queenless"].includes(colony.status)) {
+         return res.status(400).json({
+            error: "Re-introduction is only allowed for failed or queenless colonies.",
+         });
+      }
+
+      const apiaryId = colony.apiary_id;
+      const eventDate = date ? new Date(date) : new Date();
+
+      // 2️⃣ Insert event (we can reuse same event types but mark reintro in payload)
+      const eventType =
+         type === "cell" ? "intro_cell" : type === "virgin" ? "intro_virgin" : "intro_mated";
+
+      await pool.query(
+         `INSERT INTO swarm_events (
+            owner_user_id,
+            swarm_colony_id,
+            event_type,
+            event_date,
+            payload
+         )
+         VALUES ($1, $2, $3, $4, $5)`,
+         [userId, colonyId, eventType, eventDate, JSON.stringify({ type, reintroduction: true })]
+      );
+
+      // 3️⃣ Update colony back to waiting_check
+      const { rows: updatedRows } = await pool.query(
+         `UPDATE swarm_colonies
+          SET status = 'waiting_check',
+              updated_at = now()
+          WHERE swarm_colony_id = $1
+          RETURNING *`,
+         [colonyId]
+      );
+
+      const updatedColony = updatedRows[0];
+
+      // 4️⃣ New alert : check_laying in (delayDays)
+      const planned = new Date(eventDate);
+      planned.setDate(planned.getDate() + delayDays);
+
+      const { rows: alertRows } = await pool.query(
+         `INSERT INTO swarm_alerts (
+            owner_user_id,
+            apiary_id,
+            swarm_colony_id,
+            alert_type,
+            planned_for,
+            is_done
+         )
+         VALUES ($1, $2, $3, 'check_laying', $4, FALSE)
+         RETURNING *`,
+         [userId, apiaryId, colonyId, planned]
+      );
+
+      return res.json({
+         ok: true,
+         colony: updatedColony,
+         alert: alertRows[0],
+      });
+   } catch (err) {
+      console.error("🔴 POST /swarm/colonies/:colonyId/reintroductions error:", err);
+      return res.status(500).json({ error: "Server error" });
+   }
+});
+
 // 🔹 GET /swarm/apiaries/:apiaryId/active  → get active session (or null) for an apiary
 router.get("/apiaries/:apiaryId/active", authenticateUser, async (req, res) => {
    const userId = req.user.id;
