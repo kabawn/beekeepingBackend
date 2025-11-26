@@ -4,6 +4,13 @@ const router = express.Router();
 const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 
+// How many days until laying check, depending on intro type
+const INTRO_DELAY_DAYS = {
+   cell: 21, // cellule royale
+   virgin: 12, // reine vierge
+   mated: 7, // reine fécondée
+};
+
 // 🔹 Helper: check that apiary belongs to user (uses ONLY apiary_id)
 async function assertApiaryOwnership(apiaryIdParam, userId) {
    const apiaryId = parseInt(apiaryIdParam, 10);
@@ -231,6 +238,120 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
          });
       }
 
+      return res.status(err.status || 500).json({ error: err.message || "Server error" });
+   }
+});
+
+// POST /swarm/sessions/:sessionId/introductions
+// Body: { type: "cell" | "virgin" | "mated", date? }
+router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { sessionId } = req.params;
+   const { type, date } = req.body || {};
+
+   console.log("🟢 [POST /swarm/sessions/:sessionId/introductions]", {
+      userId,
+      sessionId,
+      type,
+      date,
+   });
+
+   const allowedTypes = ["cell", "virgin", "mated"];
+   if (!allowedTypes.includes(type)) {
+      return res.status(400).json({ error: "Invalid type. Must be 'cell', 'virgin' or 'mated'." });
+   }
+
+   const delayDays = INTRO_DELAY_DAYS[type];
+   if (!delayDays) {
+      return res.status(500).json({ error: "No delay configured for this type." });
+   }
+
+   try {
+      // 1️⃣ Check session belongs to this user and is active
+      const session = await getUserSessionById(sessionId, userId);
+
+      if (!session.is_active || session.ended_at) {
+         return res.status(400).json({ error: "Session is not active" });
+      }
+
+      const apiaryId = session.apiary_id;
+
+      // 2️⃣ Get ALL colonies in this session that are still pending
+      const { rows: colonies } = await pool.query(
+         `SELECT swarm_colony_id
+          FROM swarm_colonies
+          WHERE swarm_session_id = $1
+            AND owner_user_id = $2
+            AND status = 'pending'`,
+         [session.swarm_session_id, userId]
+      );
+
+      if (!colonies.length) {
+         return res.status(400).json({
+            error: "No pending colonies found for this session.",
+         });
+      }
+
+      const eventDate = date ? new Date(date) : new Date();
+
+      // 3️⃣ For each colony → event + status + alert
+      const results = [];
+
+      for (const row of colonies) {
+         const colId = row.swarm_colony_id;
+
+         // 3.a) Insert event
+         const eventType =
+            type === "cell" ? "intro_cell" : type === "virgin" ? "intro_virgin" : "intro_mated";
+
+         await pool.query(
+            `INSERT INTO swarm_events (
+               owner_user_id,
+               swarm_colony_id,
+               event_type,
+               event_date,
+               payload
+            )
+            VALUES ($1, $2, $3, $4, $5)`,
+            [userId, colId, eventType, eventDate, JSON.stringify({ type })]
+         );
+
+         // 3.b) Update colony status → waiting_check
+         await pool.query(
+            `UPDATE swarm_colonies
+             SET status = 'waiting_check'
+             WHERE swarm_colony_id = $1`,
+            [colId]
+         );
+
+         // 3.c) Create alert: check_laying at eventDate + delayDays
+         const planned = new Date(eventDate);
+         planned.setDate(planned.getDate() + delayDays);
+
+         await pool.query(
+            `INSERT INTO swarm_alerts (
+               apiary_id,
+               swarm_colony_id,
+               alert_type,
+               planned_for,
+               is_done
+            )
+            VALUES ($1, $2, 'check_laying', $3, FALSE)`,
+            [apiaryId, colId, planned]
+         );
+
+         results.push({ swarm_colony_id: colId });
+      }
+
+      console.log("🟢 Introductions applied to colonies:", results.length);
+
+      return res.json({
+         ok: true,
+         count: results.length,
+         colonies: results,
+      });
+   } catch (err) {
+      console.error("🔴 POST /swarm/sessions/:sessionId/introductions error:", err);
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
