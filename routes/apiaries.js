@@ -2,10 +2,9 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-// 🧠 helper: normalize array of productions
+// helper: normalize array of productions
 function normalizeProductions(raw, mainProd) {
    if (Array.isArray(raw) && raw.length > 0) {
       return [...new Set(raw.map((v) => String(v).toLowerCase()))];
@@ -14,7 +13,7 @@ function normalizeProductions(raw, mainProd) {
    return ["honey"];
 }
 
-// 🟢 CREATE APIARY
+// CREATE APIARY
 router.post("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
@@ -80,9 +79,10 @@ router.post("/", authenticateUser, async (req, res) => {
       await Promise.all(
          prodList.map((p) =>
             pool.query(
-               `INSERT INTO apiary_productions (apiary_id, production_type)
-                VALUES ($1, $2)
-                ON CONFLICT DO NOTHING`,
+               `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
+                VALUES ($1, $2, TRUE)
+                ON CONFLICT (apiary_id, production_type)
+                DO UPDATE SET is_active = TRUE, deactivated_at = NULL`,
                [apiaryId, p]
             )
          )
@@ -98,10 +98,21 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-// 🟡 HIVE COUNT
-router.get("/:id/hives/count", async (req, res) => {
+// HIVE COUNT
+router.get("/:id/hives/count", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
+
    try {
+      const ownership = await pool.query(
+         "SELECT 1 FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
+         [id, userId]
+      );
+
+      if (ownership.rows.length === 0) {
+         return res.status(404).json({ error: "Apiary not found" });
+      }
+
       const result = await pool.query("SELECT COUNT(*) AS count FROM hives WHERE apiary_id = $1", [
          id,
       ]);
@@ -112,7 +123,7 @@ router.get("/:id/hives/count", async (req, res) => {
    }
 });
 
-// 🟡 GET USER APIARIES (with productions[])
+// GET USER APIARIES (with productions[])
 router.get("/", authenticateUser, async (req, res) => {
    try {
       const userId = req.user.id;
@@ -143,10 +154,21 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
-// 🟡 HIVES FOR ONE APIARY
-router.get("/:id/hives", async (req, res) => {
+// HIVES FOR ONE APIARY
+router.get("/:id/hives", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
+
    try {
+      const ownership = await pool.query(
+         "SELECT 1 FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
+         [id, userId]
+      );
+
+      if (ownership.rows.length === 0) {
+         return res.status(404).json({ error: "Apiary not found" });
+      }
+
       const result = await pool.query(
          "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
          [id]
@@ -158,9 +180,11 @@ router.get("/:id/hives", async (req, res) => {
    }
 });
 
-// 🟡 GET ONE APIARY (with productions[])
-router.get("/:id", async (req, res) => {
+// GET ONE APIARY (with productions[])
+router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
+
    try {
       const result = await pool.query(
          `
@@ -175,9 +199,10 @@ router.get("/:id", async (req, res) => {
          LEFT JOIN apiary_productions p
            ON p.apiary_id = a.apiary_id
          WHERE a.apiary_id = $1
+           AND a.owner_user_id = $2
          GROUP BY a.apiary_id
          `,
-         [id]
+         [id, userId]
       );
 
       if (result.rows.length === 0) {
@@ -191,7 +216,7 @@ router.get("/:id", async (req, res) => {
    }
 });
 
-// 🟠 UPDATE APIARY
+// UPDATE APIARY
 router.put("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user.id;
@@ -246,9 +271,10 @@ router.put("/:id", authenticateUser, async (req, res) => {
          await Promise.all(
             prodList.map((p) =>
                pool.query(
-                  `INSERT INTO apiary_productions (apiary_id, production_type)
-                   VALUES ($1, $2)
-                   ON CONFLICT DO NOTHING`,
+                  `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
+                   VALUES ($1, $2, TRUE)
+                   ON CONFLICT (apiary_id, production_type)
+                   DO UPDATE SET is_active = TRUE, deactivated_at = NULL`,
                   [id, p]
                )
             )
@@ -262,13 +288,16 @@ router.put("/:id", authenticateUser, async (req, res) => {
    }
 });
 
-// 🔴 DELETE APIARY
-router.delete("/:id", async (req, res) => {
+// DELETE APIARY
+router.delete("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
+
    try {
-      const result = await pool.query("DELETE FROM apiaries WHERE apiary_id = $1 RETURNING *", [
-         id,
-      ]);
+      const result = await pool.query(
+         "DELETE FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 RETURNING *",
+         [id, userId]
+      );
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
@@ -280,3 +309,4 @@ router.delete("/:id", async (req, res) => {
 });
 
 module.exports = router;
+
