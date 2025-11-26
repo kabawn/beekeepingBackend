@@ -76,17 +76,28 @@ router.post("/", authenticateUser, async (req, res) => {
       // 4) insert productions into apiary_productions
       const prodList = normalizeProductions(productions, safeMain);
 
-      await Promise.all(
-         prodList.map((p) =>
-            pool.query(
-               `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
-                VALUES ($1, $2, TRUE)
-                ON CONFLICT (apiary_id, production_type)
-                DO UPDATE SET is_active = TRUE, deactivated_at = NULL`,
-               [apiaryId, p]
+      if (prodList.length > 0) {
+         await pool.query(
+            `UPDATE apiary_productions
+             SET is_active = TRUE, deactivated_at = NULL
+             WHERE apiary_id = $1 AND production_type = ANY($2::text[])`,
+            [apiaryId, prodList]
+         );
+
+         await Promise.all(
+            prodList.map((p) =>
+               pool.query(
+                  `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
+                   SELECT $1, $2, TRUE
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM apiary_productions
+                     WHERE apiary_id = $1 AND production_type = $2
+                   )`,
+                  [apiaryId, p]
+               )
             )
-         )
-      );
+         );
+      }
 
       return res.status(201).json({
          apiary,
@@ -267,14 +278,23 @@ router.put("/:id", authenticateUser, async (req, res) => {
             [id]
          );
 
-         // insert new active ones
+         // reactivate existing and insert missing
+         await pool.query(
+            `UPDATE apiary_productions
+             SET is_active = TRUE, deactivated_at = NULL
+             WHERE apiary_id = $1 AND production_type = ANY($2::text[])`,
+            [id, prodList]
+         );
+
          await Promise.all(
             prodList.map((p) =>
                pool.query(
                   `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
-                   VALUES ($1, $2, TRUE)
-                   ON CONFLICT (apiary_id, production_type)
-                   DO UPDATE SET is_active = TRUE, deactivated_at = NULL`,
+                   SELECT $1, $2, TRUE
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM apiary_productions
+                     WHERE apiary_id = $1 AND production_type = $2
+                   )`,
                   [id, p]
                )
             )
