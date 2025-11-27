@@ -45,6 +45,7 @@ const hivePurposesRoutes = require("./routes/hivePurposes");
 const interventionsRoutes = require("./routes/interventions");
 const swarmProductionRoutes = require("./routes/swarmProduction");
 const hiveEvaluationsRouter = require("./routes/hiveEvaluations");
+const hiveDescriptorsRouter = require("./routes/hiveDescriptors");
 
 
 
@@ -81,6 +82,7 @@ app.use("/api/nuc-sessions", require("./routes/nucSessions"));
 app.use("/api/interventions", interventionsRoutes);
 app.use("/api/swarm", swarmProductionRoutes);
 app.use("/api/hive-evaluations", hiveEvaluationsRouter);
+app.use("/api/hive-descriptors", hiveDescriptorsRouter);
 
 
 app.get("/", (req, res) => {
