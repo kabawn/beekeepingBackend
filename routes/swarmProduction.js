@@ -416,6 +416,7 @@ router.patch("/colonies/:colonyId/status", authenticateUser, async (req, res) =>
 
 // 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
 // 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
+// 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
 router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { sessionId } = req.params;
@@ -445,7 +446,8 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
          [sessionId]
       );
 
-      const stats = colonies.reduce(
+      // 🧮 Build stats
+      const baseStats = colonies.reduce(
          (acc, col) => {
             acc.total += 1;
             acc.by_status[col.status] = (acc.by_status[col.status] || 0) + 1;
@@ -454,12 +456,36 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
          { total: 0, by_status: {} }
       );
 
+      const success = baseStats.by_status["laying_ok"] || 0;
+      const failures =
+         (baseStats.by_status["failed"] || 0) +
+         (baseStats.by_status["queenless"] || 0) +
+         (baseStats.by_status["dead"] || 0);
+      const waiting = baseStats.by_status["waiting_check"] || 0;
+      const pending = baseStats.by_status["pending"] || 0;
+
+      const success_rate =
+         baseStats.total > 0
+            ? Math.round((100 * success / baseStats.total) * 10) / 10
+            : 0;
+
+      const stats = {
+         total: baseStats.total,
+         by_status: baseStats.by_status,
+         success,
+         failures,
+         waiting,
+         pending,
+         success_rate,
+      };
+
       return res.json({ session, colonies, stats });
    } catch (err) {
       console.error("🔴 GET /swarm/sessions/:sessionId error:", err);
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
+
 
 // PATCH /swarm/sessions/:sessionId/end  → close an active swarm session
 router.patch("/sessions/:sessionId/end", authenticateUser, async (req, res) => {
@@ -694,5 +720,128 @@ router.get("/alerts/upcoming", authenticateUser, async (req, res) => {
       return res.status(500).json({ error: "Server error" });
    }
 });
+
+// 🔹 GET /swarm/stats/overview?from=2025-01-01&to=2025-12-31&apiary_id=79 (optional)
+router.get("/stats/overview", authenticateUser, async (req, res) => {
+  const userId = req.user.id;
+  const { from, to, apiary_id } = req.query;
+
+  // simple defaults
+  const today = new Date().toISOString().slice(0, 10);
+  const fromDate = from || "2025-01-01"; // you can change this later
+  const toDate = to || today;
+
+  try {
+    // 1️⃣ Global stats
+    const globalSql = `
+      SELECT
+        COUNT(*) AS total_colonies,
+        COUNT(*) FILTER (WHERE c.status = 'laying_ok') AS success,
+        COUNT(*) FILTER (WHERE c.status IN ('failed','queenless','dead')) AS failures
+      FROM swarm_colonies c
+      JOIN swarm_sessions s ON s.swarm_session_id = c.swarm_session_id
+      WHERE s.owner_user_id = $1
+        AND s.started_at::date BETWEEN $2 AND $3
+        ${apiary_id ? "AND c.apiary_id = $4" : ""}
+    `;
+
+    const globalParams = apiary_id
+      ? [userId, fromDate, toDate, apiary_id]
+      : [userId, fromDate, toDate];
+
+    const { rows: globalRows } = await pool.query(globalSql, globalParams);
+    const g = globalRows[0] || { total_colonies: 0, success: 0, failures: 0 };
+
+    const globalSuccessRate =
+      g.total_colonies > 0
+        ? Math.round((100 * g.success / g.total_colonies) * 10) / 10
+        : 0;
+
+    // 2️⃣ Stats by intro type (cell / virgin / mated)
+    const introSql = `
+      SELECT
+        e.payload->>'type' AS intro_type,
+        COUNT(DISTINCT c.swarm_colony_id) AS total_colonies,
+        COUNT(DISTINCT c.swarm_colony_id) FILTER (WHERE c.status = 'laying_ok') AS success
+      FROM swarm_events e
+      JOIN swarm_colonies c ON c.swarm_colony_id = e.swarm_colony_id
+      JOIN swarm_sessions s ON s.swarm_session_id = c.swarm_session_id
+      WHERE e.owner_user_id = $1
+        AND e.event_type IN ('intro_cell','intro_virgin','intro_mated')
+        AND e.event_date::date BETWEEN $2 AND $3
+        ${apiary_id ? "AND c.apiary_id = $4" : ""}
+      GROUP BY intro_type
+      ORDER BY intro_type;
+    `;
+
+    const { rows: introRows } = await pool.query(introSql, globalParams);
+
+    const byIntro = introRows.map(r => {
+      const total = Number(r.total_colonies);
+      const success = Number(r.success);
+      const success_rate =
+        total > 0 ? Math.round((100 * success / total) * 10) / 10 : 0;
+
+      return {
+        intro_type: r.intro_type, // 'cell' | 'virgin' | 'mated'
+        total,
+        success,
+        success_rate,
+      };
+    });
+
+    // 3️⃣ Stats by apiary (only if not filtering by one apiary)
+    let byApiary = [];
+
+    if (!apiary_id) {
+      const apiarySql = `
+        SELECT
+          c.apiary_id,
+          a.apiary_name,
+          COUNT(*) AS total_colonies,
+          COUNT(*) FILTER (WHERE c.status = 'laying_ok') AS success
+        FROM swarm_colonies c
+        JOIN apiaries a ON a.apiary_id = c.apiary_id
+        JOIN swarm_sessions s ON s.swarm_session_id = c.swarm_session_id
+        WHERE s.owner_user_id = $1
+          AND s.started_at::date BETWEEN $2 AND $3
+        GROUP BY c.apiary_id, a.apiary_name
+        ORDER BY a.apiary_name;
+      `;
+
+      const { rows } = await pool.query(apiarySql, [userId, fromDate, toDate]);
+      byApiary = rows.map(r => {
+        const total = Number(r.total_colonies);
+        const success = Number(r.success);
+        const success_rate =
+          total > 0 ? Math.round((100 * success / total) * 10) / 10 : 0;
+
+        return {
+          apiary_id: r.apiary_id,
+          apiary_name: r.apiary_name,
+          total,
+          success,
+          success_rate,
+        };
+      });
+    }
+
+    return res.json({
+      period: { from: fromDate, to: toDate, apiary_id: apiary_id || null },
+      global: {
+        total_colonies: Number(g.total_colonies || 0),
+        success: Number(g.success || 0),
+        failures: Number(g.failures || 0),
+        success_rate: globalSuccessRate,
+      },
+      by_intro_type: byIntro,
+      by_apiary: byApiary,
+    });
+  } catch (err) {
+    console.error("🔴 GET /swarm/stats/overview error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 module.exports = router;
