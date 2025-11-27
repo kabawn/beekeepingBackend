@@ -46,6 +46,7 @@ const interventionsRoutes = require("./routes/interventions");
 const swarmProductionRoutes = require("./routes/swarmProduction");
 const hiveEvaluationsRouter = require("./routes/hiveEvaluations");
 const hiveDescriptorsRouter = require("./routes/hiveDescriptors");
+const hivePerformanceRouter = require("./routes/hivePerformance");
 
 
 
@@ -83,6 +84,7 @@ app.use("/api/interventions", interventionsRoutes);
 app.use("/api/swarm", swarmProductionRoutes);
 app.use("/api/hive-evaluations", hiveEvaluationsRouter);
 app.use("/api/hive-descriptors", hiveDescriptorsRouter);
+app.use("/api/hive-performance", hivePerformanceRouter);
 
 
 app.get("/", (req, res) => {
