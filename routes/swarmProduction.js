@@ -671,10 +671,8 @@ router.get("/alerts/upcoming", authenticateUser, async (req, res) => {
             h.hive_code,
             h.hive_type,
             h.hive_purpose,
-            -- days_to_check > 0  => in X days
-            -- days_to_check = 0  => today
-            -- days_to_check < 0  => late by |X|
-            DATE_PART('day', sa.planned_for::date - now()::date) AS days_to_check
+            -- this already returns an integer number of days
+            (sa.planned_for::date - now()::date) AS days_to_check
          FROM swarm_alerts sa
          JOIN apiaries a       ON a.apiary_id = sa.apiary_id
          JOIN swarm_colonies c ON c.swarm_colony_id = sa.swarm_colony_id
@@ -682,15 +680,14 @@ router.get("/alerts/upcoming", authenticateUser, async (req, res) => {
          WHERE sa.owner_user_id = $1
            AND sa.alert_type = 'check_laying'
            AND sa.is_done = FALSE
-           -- keep late alerts but not older than daysPast
            AND sa.planned_for::date >= (now()::date - $3 * INTERVAL '1 day')
-           -- and only up to daysAhead in the future
            AND sa.planned_for::date <= (now()::date + $2 * INTERVAL '1 day')
          ORDER BY sa.planned_for ASC, a.apiary_name, h.hive_code
          `,
          [userId, daysAhead, daysPast]
       );
 
+      console.log("🟢 [GET /swarm/alerts/upcoming] rows =", rows);
       return res.json({ alerts: rows });
    } catch (err) {
       console.error("🔴 GET /swarm/alerts/upcoming error:", err);
