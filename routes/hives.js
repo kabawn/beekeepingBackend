@@ -110,30 +110,27 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-
-
 // 🆕 Global hive count for the logged-in user
 router.get("/count/global", authenticateUser, async (req, res) => {
-  const userId = req.user.id;
+   const userId = req.user.id;
 
-  try {
-    // If `hives` table doesn't have owner_user_id, we join through apiaries
-    const { rows } = await pool.query(
-      `
+   try {
+      const { rows } = await pool.query(
+         `
       SELECT COUNT(*) AS hives
       FROM hives h
       JOIN apiaries a ON a.apiary_id = h.apiary_id
       WHERE a.owner_user_id = $1
       `,
-      [userId]
-    );
+         [userId]
+      );
 
-    const totalHives = Number(rows[0]?.hives || 0);
-    res.json({ hives: totalHives });
-  } catch (err) {
-    console.error("Error fetching global hive count:", err);
-    res.status(500).json({ error: "Failed to fetch hive count" });
-  }
+      const totalHives = Number(rows[0]?.hives || 0);
+      res.json({ hives: totalHives });
+   } catch (err) {
+      console.error("Error fetching global hive count:", err);
+      res.status(500).json({ error: "Failed to fetch hive count" });
+   }
 });
 
 // 🖼️ تحميل صورة QR
