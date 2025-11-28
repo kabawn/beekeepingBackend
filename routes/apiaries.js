@@ -166,11 +166,14 @@ router.get("/", authenticateUser, async (req, res) => {
 });
 
 // HIVES FOR ONE APIARY
+// HIVES FOR ONE APIARY (with optional pagination)
 router.get("/:id/hives", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user.id;
+   const { limit, offset } = req.query;
 
    try {
+      // ✅ تأكد من ملكية المنحل
       const ownership = await pool.query(
          "SELECT 1 FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
          [id, userId]
@@ -180,11 +183,25 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
          return res.status(404).json({ error: "Apiary not found" });
       }
 
+      // 🔹 لو ما فيه limit/offset → سلوك قديم (كل الهفز)
+      if (!limit && !offset) {
+         const result = await pool.query(
+            "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
+            [id]
+         );
+         return res.json(result.rows);
+      }
+
+      // 🔹 لو فيه pagination
+      const safeLimit = Math.min(parseInt(limit, 10) || 60, 200); // max 200 per page
+      const safeOffset = parseInt(offset, 10) || 0;
+
       const result = await pool.query(
-         "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
-         [id]
+         "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC LIMIT $2 OFFSET $3",
+         [id, safeLimit, safeOffset]
       );
-      res.json(result.rows);
+
+      return res.json({ hives: result.rows });
    } catch (error) {
       console.error("Error fetching hives for apiary:", error);
       res.status(500).json({ error: "Server error while fetching hives for apiary" });
@@ -329,4 +346,3 @@ router.delete("/:id", authenticateUser, async (req, res) => {
 });
 
 module.exports = router;
-
