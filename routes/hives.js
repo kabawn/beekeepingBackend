@@ -110,26 +110,43 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-// 🆕 Global hive count for the logged-in user
+// 🆕 Global hive count for the logged-in user (Supabase version)
 router.get("/count/global", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
    try {
-      const { rows } = await pool.query(
-         `
-      SELECT COUNT(*) AS hives
-      FROM hives h
-      JOIN apiaries a ON a.apiary_id = h.apiary_id
-      WHERE a.owner_user_id = $1
-      `,
-         [userId]
-      );
+      // 1) Get all apiaries for this user
+      const { data: apiaries, error: apiaryError } = await supabase
+         .from("apiaries")
+         .select("apiary_id")
+         .eq("owner_user_id", userId);
 
-      const totalHives = Number(rows[0]?.hives || 0);
-      res.json({ hives: totalHives });
+      if (apiaryError) {
+         console.error("Error fetching user apiaries:", apiaryError);
+         return res.status(500).json({ error: "Failed to fetch apiaries" });
+      }
+
+      if (!apiaries || apiaries.length === 0) {
+         return res.json({ hives: 0 });
+      }
+
+      const apiaryIds = apiaries.map((a) => a.apiary_id);
+
+      // 2) Count hives where apiary_id is in this list
+      const { count, error: hiveError } = await supabase
+         .from("hives")
+         .select("hive_id", { count: "exact", head: true })
+         .in("apiary_id", apiaryIds);
+
+      if (hiveError) {
+         console.error("Error counting hives:", hiveError);
+         return res.status(500).json({ error: "Failed to count hives" });
+      }
+
+      return res.json({ hives: count || 0 });
    } catch (err) {
-      console.error("Error fetching global hive count:", err);
-      res.status(500).json({ error: "Failed to fetch hive count" });
+      console.error("Unexpected error in /hives/count/global:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
