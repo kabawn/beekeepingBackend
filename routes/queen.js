@@ -514,7 +514,6 @@ router.get("/grafts/lines/:lineId/cells", async (req, res) => {
    }
 });
 
-
 // 🔽 ADD THIS NEW ROUTE JUST AFTER THE ONE ABOVE
 //
 
@@ -541,11 +540,13 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
             s.grandmother_female,
             s.grandfather_female,
             s.grandmother_male,
-            s.grandfather_male
+            s.grandfather_male,
+            b.name AS breeder_name
          FROM queen_cells c
          JOIN queen_graft_lines gl ON gl.id = c.line_id
          JOIN queen_graft_sessions gs ON gs.id = gl.session_id
          JOIN queen_strains s ON s.id = gl.strain_id
+         LEFT JOIN queen_breeders b ON b.id = gl.breeder_id
          WHERE c.line_id = $1 AND gs.owner_id = $2
          ORDER BY c.cell_index ASC
          `,
@@ -571,125 +572,83 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-      const pageWidth = 595.28;
+      const pageWidth = 595.28; // A4 portrait in points
       const pageHeight = 841.89;
 
-      const labelW = 198; // 70 mm
-      const labelH = 71;  // 25 mm
+      // 70 x 25 mm → ~198 x 71 points
+      const labelW = 198;
+      const labelH = 71;
       const cols = 3;
       const rowsPerPage = 11;
       const labelsPerPage = cols * rowsPerPage;
 
       const marginTop = 30;
       const marginLeft = 10;
+      const colGap = 1;
 
       const textColor = rgb(0, 0, 0);
 
       let page = pdfDoc.addPage([pageWidth, pageHeight]);
 
-      cells.forEach((cell, idx) => {
-         const pageIndex = Math.floor(idx / labelsPerPage);
-         const indexOnPage = idx % labelsPerPage;
+      for (let idx = 0; idx < cells.length; idx++) {
+         const cell = cells[idx];
 
-         if (indexOnPage === 0 && pageIndex > 0) {
+         // New page every 33 labels
+         if (idx > 0 && idx % labelsPerPage === 0) {
             page = pdfDoc.addPage([pageWidth, pageHeight]);
          }
 
+         const indexOnPage = idx % labelsPerPage;
          const row = Math.floor(indexOnPage / cols);
          const col = indexOnPage % cols;
 
-         const x = marginLeft + col * (labelW + 1);
-         const y =
-            pageHeight - marginTop - row * labelH; // top-left corner of label
+         const x = marginLeft + col * (labelW + colGap);
+         const yTop = pageHeight - marginTop - row * labelH;
 
-         const parents =
-            cell.female_line && cell.male_line
-               ? `${cell.female_line} x ${cell.male_line}`
+         // --- Parent & grand-parent formatting --------------------------------
+         const parentsCore =
+            cell.female_line || cell.male_line
+               ? `${cell.female_line || "?"} x ${cell.male_line || "?"}`
                : "";
-         const grandparentsParts = [];
+         const parentsLine = parentsCore ? `[ ${parentsCore} ]` : "";
+
+         const gpParts = [];
          if (cell.grandmother_female || cell.grandfather_female) {
-            grandparentsParts.push(
-               `[${cell.grandmother_female || "?"} x ${cell.grandfather_female || "?"}]`
-            );
+            gpParts.push(`[${cell.grandmother_female || "?"} x ${cell.grandfather_female || "?"}]`);
          }
          if (cell.grandmother_male || cell.grandfather_male) {
-            grandparentsParts.push(
-               `[${cell.grandmother_male || "?"} x ${cell.grandfather_male || "?"}]`
-            );
+            gpParts.push(`[${cell.grandmother_male || "?"} x ${cell.grandfather_male || "?"}]`);
          }
-         const grandparents = grandparentsParts.join(" x ");
+
+         let grandparentsLine = "";
+         if (gpParts.length === 2) {
+            // { [GMF x GFF] * [GMM x GMF] }
+            grandparentsLine = `{ ${gpParts[0]} * ${gpParts[1]} }`;
+         } else if (gpParts.length === 1) {
+            grandparentsLine = `{ ${gpParts[0]} }`;
+         }
 
          const graftDateShort = formatFR(cell.graft_date);
          const layingShort = formatFR(cell.date_laying_expected);
 
-         // Background + border
+         const greffText =
+            graftDateShort && layingShort
+               ? `Greffage : ${graftDateShort} [${layingShort}]`
+               : graftDateShort
+               ? `Greffage : ${graftDateShort}`
+               : "";
+
+         const lotText = `Lot : ${cell.full_lot_number || cell.lot_code || ""}  ·  Cell #${
+            cell.cell_index
+         }`;
+
+         const rucherLine = `Ruchers de Cocagne - ${cell.season}`;
+
+         // ----------------------------------------------------------------------
+         // Label background
          page.drawRectangle({
             x,
-            y: y - labelH,
-            width: labelW,
-            height: labelH,
-            color: rgb(1, 1, 1),
-            borderColor: rgb(0.85, 0.85, 0.85),
-            borderWidth: 0.5,
-         });
-
-         // QR code (right side)
-         // (if qr_payload is a JSON object in DB, stringify it)
-         const qrPayload =
-            typeof cell.qr_payload === "string"
-               ? cell.qr_payload
-               : JSON.stringify(cell.qr_payload || {});
-
-         // pdf-lib needs an image buffer
-         // we generate a PNG QR with qrcode
-         // (this function is async, but we are in sync loop, so we will handle outside)
-      });
-
-      // Because embedding images is async, it’s easier to build labels in a for-loop:
-      const pdfDoc2 = await PDFDocument.create();
-      const font2 = await pdfDoc2.embedFont(StandardFonts.Helvetica);
-      const fontBold2 = await pdfDoc2.embedFont(StandardFonts.HelveticaBold);
-
-      let page2 = pdfDoc2.addPage([pageWidth, pageHeight]);
-
-      for (let idx = 0; idx < cells.length; idx++) {
-         const cell = cells[idx];
-         const pageIndex = Math.floor(idx / labelsPerPage);
-         const indexOnPage = idx % labelsPerPage;
-
-         if (indexOnPage === 0 && pageIndex > 0) {
-            page2 = pdfDoc2.addPage([pageWidth, pageHeight]);
-         }
-
-         const row = Math.floor(indexOnPage / cols);
-         const col = indexOnPage % cols;
-
-         const x = marginLeft + col * (labelW + 1);
-         const y = pageHeight - marginTop - row * labelH;
-
-         const parents =
-            cell.female_line && cell.male_line
-               ? `${cell.female_line} x ${cell.male_line}`
-               : "";
-         const grandparentsParts = [];
-         if (cell.grandmother_female || cell.grandfather_female) {
-            grandparentsParts.push(
-               `[${cell.grandmother_female || "?"} x ${cell.grandfather_female || "?"}]`
-            );
-         }
-         if (cell.grandmother_male || cell.grandfather_male) {
-            grandparentsParts.push(
-               `[${cell.grandmother_male || "?"} x ${cell.grandfather_male || "?"}]`
-            );
-         }
-         const grandparents = grandparentsParts.join(" x ");
-
-         const graftDateShort = formatFR(cell.graft_date);
-         const layingShort = formatFR(cell.date_laying_expected);
-
-         page2.drawRectangle({
-            x,
-            y: y - labelH,
+            y: yTop - labelH,
             width: labelW,
             height: labelH,
             color: rgb(1, 1, 1),
@@ -699,81 +658,86 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
 
          // Text block (left side)
          const textX = x + 8;
-         let textY = y - 16;
+         let textY = yTop - 16;
 
-         page2.drawText(cell.strain_name || "", {
+         // 1) Strain name (Souche)
+         page.drawText(cell.strain_name || "", {
             x: textX,
             y: textY,
             size: 12,
-            font: fontBold2,
+            font: fontBold,
             color: textColor,
          });
-
          textY -= 14;
-         if (parents) {
-            page2.drawText(`[ ${parents} ]`, {
+
+         // 2) Parents line [ Z840 x Z953 ]
+         if (parentsLine) {
+            page.drawText(parentsLine, {
                x: textX,
                y: textY,
                size: 8,
-               font: font2,
+               font,
                color: textColor,
             });
             textY -= 10;
          }
 
-         if (grandparents) {
-            page2.drawText(grandparents, {
+         // 3) Grandparents line { [Z500 x Z482] * [Z320 x Z301] }
+         if (grandparentsLine) {
+            page.drawText(grandparentsLine, {
                x: textX,
                y: textY,
                size: 7,
-               font: font2,
+               font,
                color: textColor,
             });
             textY -= 10;
          }
 
-         // Greffage line
-         const greffText =
-            graftDateShort && layingShort
-               ? `Greffage : ${graftDateShort} [${layingShort}]`
-               : graftDateShort
-               ? `Greffage : ${graftDateShort}`
-               : "";
+         // 4) (Optional) breeder > Name <
+         if (cell.breeder_name) {
+            page.drawText(`> ${cell.breeder_name} <`, {
+               x: textX,
+               y: textY,
+               size: 7,
+               font,
+               color: textColor,
+            });
+            textY -= 9;
+         }
 
+         // 5) Greffage line
          if (greffText) {
-            page2.drawText(greffText, {
+            page.drawText(greffText, {
                x: textX,
                y: textY,
                size: 8,
-               font: font2,
+               font,
                color: textColor,
             });
-            textY -= 12;
+            textY -= 11;
          }
 
-         // Lot + cell index
-         page2.drawText(
-            `Lot : ${cell.full_lot_number || cell.lot_code || ""}  ·  Cell #${cell.cell_index}`,
-            {
-               x: textX,
-               y: textY,
-               size: 7,
-               font: font2,
-               color: textColor,
-            }
-         );
-         textY -= 12;
-
-         // Apiary/season line – here I just reuse season
-         page2.drawText(`Ruchers de Cocagne - ${cell.season}`, {
+         // 6) Lot + Cell index
+         page.drawText(lotText, {
             x: textX,
             y: textY,
             size: 7,
-            font: font2,
+            font,
+            color: textColor,
+         });
+         textY -= 11;
+
+         // 7) Rucher + season
+         page.drawText(rucherLine, {
+            x: textX,
+            y: textY,
+            size: 7,
+            font,
             color: textColor,
          });
 
-         // QR code on the right
+         // --- QR code (right side) -------------------------------------------
          const qrPayload =
             typeof cell.qr_payload === "string"
                ? cell.qr_payload
@@ -783,13 +747,13 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
             width: 140,
             margin: 0,
          });
-         const qrImage = await pdfDoc2.embedPng(qrBuffer);
+         const qrImage = await pdfDoc.embedPng(qrBuffer);
 
-         const qrSize = 60;
+         const qrSize = 58; // a bit smaller to breathe
          const qrX = x + labelW - qrSize - 10;
-         const qrY = y - labelH + 6;
+         const qrY = yTop - labelH + 6;
 
-         page2.drawImage(qrImage, {
+         page.drawImage(qrImage, {
             x: qrX,
             y: qrY,
             width: qrSize,
@@ -797,13 +761,10 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          });
       }
 
-      const pdfBytes = await pdfDoc2.save();
+      const pdfBytes = await pdfDoc.save();
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-         "Content-Disposition",
-         `attachment; filename=queen_cells_labels_${lineId}.pdf`
-      );
+      res.setHeader("Content-Disposition", `attachment; filename=queen_cells_labels_${lineId}.pdf`);
       return res.send(Buffer.from(pdfBytes));
    } catch (err) {
       console.error("Error generating labels PDF:", err);
