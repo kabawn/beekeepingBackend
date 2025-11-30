@@ -25,19 +25,19 @@ const harvestsRouter = require("./routes/harvests");
 const harvestAnalysisRouter = require("./routes/harvestAnalysis");
 const inspectionsRoutes = require("./routes/inspections");
 const authRoutes = require("./routes/auth");
-const companiesRouter = require('./routes/companies');
-const invitationsRoutes = require('./routes/invitations');
-const hivesQrPdfRouter = require('./routes/hivesQrPdf');
-const apiaryNotesRouter = require('./routes/apiaryNotes');
-const queenPedigreeRouter = require('./routes/queenPedigree');
-const queenCharacteristicsRouter = require('./routes/queenCharacteristics');
+const companiesRouter = require("./routes/companies");
+const invitationsRoutes = require("./routes/invitations");
+const hivesQrPdfRouter = require("./routes/hivesQrPdf");
+const apiaryNotesRouter = require("./routes/apiaryNotes");
+const queenPedigreeRouter = require("./routes/queenPedigree");
+const queenCharacteristicsRouter = require("./routes/queenCharacteristics");
 const hivesPublicRouter = require("./routes/hivesPublic");
 const availablePublicKeysRoutes = require("./routes/availablePublicKeys");
-const notationConfigRouter = require('./routes/notationConfig');
-const colonyNotationsRouter = require('./routes/colonyNotations');
-const infoQueenRouter = require('./routes/infoQueen');
+const notationConfigRouter = require("./routes/notationConfig");
+const colonyNotationsRouter = require("./routes/colonyNotations");
+const infoQueenRouter = require("./routes/infoQueen");
 const inventoryRouter = require("./routes/inventory");
-const pairingSessions =  require("./routes/pairingSessions")
+const pairingSessions = require("./routes/pairingSessions");
 const notationSessionsRouter = require("./routes/notationSessions");
 const nucCycles = require("./routes/nucCycles");
 const hiveTypesRoutes = require("./routes/hiveTypes");
@@ -48,9 +48,7 @@ const hiveEvaluationsRouter = require("./routes/hiveEvaluations");
 const hiveDescriptorsRouter = require("./routes/hiveDescriptors");
 const hivePerformanceRouter = require("./routes/hivePerformance");
 const analyticsEvaluationsLongRouter = require("./routes/analyticsEvaluationsLong");
-
-
-
+const queenRoutes = require("./routes/queen");
 
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
@@ -61,19 +59,19 @@ app.use("/api/harvests", harvestsRouter);
 app.use("/api/harvest-analysis", harvestAnalysisRouter);
 app.use("/api/inspections", inspectionsRoutes);
 app.use("/api/auth", authRoutes);
-app.use('/api/companies', companiesRouter);
-app.use('/api/invitations', invitationsRoutes);
+app.use("/api/companies", companiesRouter);
+app.use("/api/invitations", invitationsRoutes);
 app.use("/api/hives/pdf", hivesQrPdfRouter); // change prefix
-app.use('/api/apiary-notes', apiaryNotesRouter);
-app.use('/api/queen-pedigree', queenPedigreeRouter);
-app.use('/api/queen-characteristics', queenCharacteristicsRouter);
+app.use("/api/apiary-notes", apiaryNotesRouter);
+app.use("/api/queen-pedigree", queenPedigreeRouter);
+app.use("/api/queen-characteristics", queenCharacteristicsRouter);
 app.use("/api/hives/public", hivesPublicRouter); // change prefix
 app.use("/api/available-keys", availablePublicKeysRoutes);
-app.use('/api/notation-config', notationConfigRouter);
-app.use('/api/colony-notations', colonyNotationsRouter);
-app.use('/api/info-queen', infoQueenRouter);
-app.use('/api/inventory', inventoryRouter);
-app.use("/api/pairing-sessions", pairingSessions  );
+app.use("/api/notation-config", notationConfigRouter);
+app.use("/api/colony-notations", colonyNotationsRouter);
+app.use("/api/info-queen", infoQueenRouter);
+app.use("/api/inventory", inventoryRouter);
+app.use("/api/pairing-sessions", pairingSessions);
 app.use("/api/notation-sessions", notationSessionsRouter);
 app.use("/api/nuc-cycles", nucCycles);
 app.use("/api/super-types", require("./routes/superTypes"));
@@ -87,7 +85,7 @@ app.use("/api/hive-evaluations", hiveEvaluationsRouter);
 app.use("/api/hive-descriptors", hiveDescriptorsRouter);
 app.use("/api/hive-performance", hivePerformanceRouter);
 app.use("/api/analytics", analyticsEvaluationsLongRouter);
-
+app.use("/api/queen", queenRoutes);
 
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");
