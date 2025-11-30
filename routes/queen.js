@@ -3,7 +3,8 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
-
+const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
+const QRCode = require("qrcode");
 const {
    getSeason,
    getDayOfYear,
@@ -510,6 +511,303 @@ router.get("/grafts/lines/:lineId/cells", async (req, res) => {
    } catch (err) {
       console.error("Error fetching cells:", err);
       res.status(500).json({ error: "Error fetching cells" });
+   }
+});
+
+
+// 🔽 ADD THIS NEW ROUTE JUST AFTER THE ONE ABOVE
+//
+
+// GET /queen/grafts/lines/:lineId/cells/labels.pdf
+// Export A4 sheet of labels (33 per page, 25x70mm) with QR code
+router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
+   const ownerId = req.user.id;
+   const lineId = req.params.lineId;
+
+   try {
+      // Fetch all cells for this line + related info
+      const { rows: cells } = await pool.query(
+         `
+         SELECT
+            c.*,
+            gl.lot_code,
+            gl.date_g10,
+            gl.date_laying_expected,
+            gs.season,
+            gs.graft_date,
+            s.name AS strain_name,
+            s.female_line,
+            s.male_line,
+            s.grandmother_female,
+            s.grandfather_female,
+            s.grandmother_male,
+            s.grandfather_male
+         FROM queen_cells c
+         JOIN queen_graft_lines gl ON gl.id = c.line_id
+         JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+         JOIN queen_strains s ON s.id = gl.strain_id
+         WHERE c.line_id = $1 AND gs.owner_id = $2
+         ORDER BY c.cell_index ASC
+         `,
+         [lineId, ownerId]
+      );
+
+      if (!cells.length) {
+         return res.status(404).json({ error: "No cells found for this line" });
+      }
+
+      // Helper: format dates as DD/MM
+      const formatFR = (d) => {
+         if (!d) return "";
+         const date = new Date(d);
+         if (Number.isNaN(date.getTime())) return "";
+         const dd = String(date.getDate()).padStart(2, "0");
+         const mm = String(date.getMonth() + 1).padStart(2, "0");
+         return `${dd}/${mm}`;
+      };
+
+      // PDF setup (A4 portrait)
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      const pageWidth = 595.28;
+      const pageHeight = 841.89;
+
+      const labelW = 198; // 70 mm
+      const labelH = 71;  // 25 mm
+      const cols = 3;
+      const rowsPerPage = 11;
+      const labelsPerPage = cols * rowsPerPage;
+
+      const marginTop = 30;
+      const marginLeft = 10;
+
+      const textColor = rgb(0, 0, 0);
+
+      let page = pdfDoc.addPage([pageWidth, pageHeight]);
+
+      cells.forEach((cell, idx) => {
+         const pageIndex = Math.floor(idx / labelsPerPage);
+         const indexOnPage = idx % labelsPerPage;
+
+         if (indexOnPage === 0 && pageIndex > 0) {
+            page = pdfDoc.addPage([pageWidth, pageHeight]);
+         }
+
+         const row = Math.floor(indexOnPage / cols);
+         const col = indexOnPage % cols;
+
+         const x = marginLeft + col * (labelW + 1);
+         const y =
+            pageHeight - marginTop - row * labelH; // top-left corner of label
+
+         const parents =
+            cell.female_line && cell.male_line
+               ? `${cell.female_line} x ${cell.male_line}`
+               : "";
+         const grandparentsParts = [];
+         if (cell.grandmother_female || cell.grandfather_female) {
+            grandparentsParts.push(
+               `[${cell.grandmother_female || "?"} x ${cell.grandfather_female || "?"}]`
+            );
+         }
+         if (cell.grandmother_male || cell.grandfather_male) {
+            grandparentsParts.push(
+               `[${cell.grandmother_male || "?"} x ${cell.grandfather_male || "?"}]`
+            );
+         }
+         const grandparents = grandparentsParts.join(" x ");
+
+         const graftDateShort = formatFR(cell.graft_date);
+         const layingShort = formatFR(cell.date_laying_expected);
+
+         // Background + border
+         page.drawRectangle({
+            x,
+            y: y - labelH,
+            width: labelW,
+            height: labelH,
+            color: rgb(1, 1, 1),
+            borderColor: rgb(0.85, 0.85, 0.85),
+            borderWidth: 0.5,
+         });
+
+         // QR code (right side)
+         // (if qr_payload is a JSON object in DB, stringify it)
+         const qrPayload =
+            typeof cell.qr_payload === "string"
+               ? cell.qr_payload
+               : JSON.stringify(cell.qr_payload || {});
+
+         // pdf-lib needs an image buffer
+         // we generate a PNG QR with qrcode
+         // (this function is async, but we are in sync loop, so we will handle outside)
+      });
+
+      // Because embedding images is async, it’s easier to build labels in a for-loop:
+      const pdfDoc2 = await PDFDocument.create();
+      const font2 = await pdfDoc2.embedFont(StandardFonts.Helvetica);
+      const fontBold2 = await pdfDoc2.embedFont(StandardFonts.HelveticaBold);
+
+      let page2 = pdfDoc2.addPage([pageWidth, pageHeight]);
+
+      for (let idx = 0; idx < cells.length; idx++) {
+         const cell = cells[idx];
+         const pageIndex = Math.floor(idx / labelsPerPage);
+         const indexOnPage = idx % labelsPerPage;
+
+         if (indexOnPage === 0 && pageIndex > 0) {
+            page2 = pdfDoc2.addPage([pageWidth, pageHeight]);
+         }
+
+         const row = Math.floor(indexOnPage / cols);
+         const col = indexOnPage % cols;
+
+         const x = marginLeft + col * (labelW + 1);
+         const y = pageHeight - marginTop - row * labelH;
+
+         const parents =
+            cell.female_line && cell.male_line
+               ? `${cell.female_line} x ${cell.male_line}`
+               : "";
+         const grandparentsParts = [];
+         if (cell.grandmother_female || cell.grandfather_female) {
+            grandparentsParts.push(
+               `[${cell.grandmother_female || "?"} x ${cell.grandfather_female || "?"}]`
+            );
+         }
+         if (cell.grandmother_male || cell.grandfather_male) {
+            grandparentsParts.push(
+               `[${cell.grandmother_male || "?"} x ${cell.grandfather_male || "?"}]`
+            );
+         }
+         const grandparents = grandparentsParts.join(" x ");
+
+         const graftDateShort = formatFR(cell.graft_date);
+         const layingShort = formatFR(cell.date_laying_expected);
+
+         page2.drawRectangle({
+            x,
+            y: y - labelH,
+            width: labelW,
+            height: labelH,
+            color: rgb(1, 1, 1),
+            borderColor: rgb(0.85, 0.85, 0.85),
+            borderWidth: 0.5,
+         });
+
+         // Text block (left side)
+         const textX = x + 8;
+         let textY = y - 16;
+
+         page2.drawText(cell.strain_name || "", {
+            x: textX,
+            y: textY,
+            size: 12,
+            font: fontBold2,
+            color: textColor,
+         });
+
+         textY -= 14;
+         if (parents) {
+            page2.drawText(`[ ${parents} ]`, {
+               x: textX,
+               y: textY,
+               size: 8,
+               font: font2,
+               color: textColor,
+            });
+            textY -= 10;
+         }
+
+         if (grandparents) {
+            page2.drawText(grandparents, {
+               x: textX,
+               y: textY,
+               size: 7,
+               font: font2,
+               color: textColor,
+            });
+            textY -= 10;
+         }
+
+         // Greffage line
+         const greffText =
+            graftDateShort && layingShort
+               ? `Greffage : ${graftDateShort} [${layingShort}]`
+               : graftDateShort
+               ? `Greffage : ${graftDateShort}`
+               : "";
+
+         if (greffText) {
+            page2.drawText(greffText, {
+               x: textX,
+               y: textY,
+               size: 8,
+               font: font2,
+               color: textColor,
+            });
+            textY -= 12;
+         }
+
+         // Lot + cell index
+         page2.drawText(
+            `Lot : ${cell.full_lot_number || cell.lot_code || ""}  ·  Cell #${cell.cell_index}`,
+            {
+               x: textX,
+               y: textY,
+               size: 7,
+               font: font2,
+               color: textColor,
+            }
+         );
+         textY -= 12;
+
+         // Apiary/season line – here I just reuse season
+         page2.drawText(`Ruchers de Cocagne - ${cell.season}`, {
+            x: textX,
+            y: textY,
+            size: 7,
+            font: font2,
+            color: textColor,
+         });
+
+         // QR code on the right
+         const qrPayload =
+            typeof cell.qr_payload === "string"
+               ? cell.qr_payload
+               : JSON.stringify(cell.qr_payload || {});
+
+         const qrBuffer = await QRCode.toBuffer(qrPayload, {
+            width: 140,
+            margin: 0,
+         });
+         const qrImage = await pdfDoc2.embedPng(qrBuffer);
+
+         const qrSize = 60;
+         const qrX = x + labelW - qrSize - 10;
+         const qrY = y - labelH + 6;
+
+         page2.drawImage(qrImage, {
+            x: qrX,
+            y: qrY,
+            width: qrSize,
+            height: qrSize,
+         });
+      }
+
+      const pdfBytes = await pdfDoc2.save();
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+         "Content-Disposition",
+         `attachment; filename=queen_cells_labels_${lineId}.pdf`
+      );
+      return res.send(Buffer.from(pdfBytes));
+   } catch (err) {
+      console.error("Error generating labels PDF:", err);
+      res.status(500).json({ error: "Error generating labels PDF" });
    }
 });
 
