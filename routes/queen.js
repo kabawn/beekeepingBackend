@@ -98,6 +98,7 @@ router.get("/strains", async (req, res) => {
 });
 
 // POST /queen/strains
+// POST /queen/strains
 router.post("/strains", async (req, res) => {
    const ownerId = req.user.id;
    const {
@@ -127,7 +128,7 @@ router.post("/strains", async (req, res) => {
             owner_id, season, name,
             female_line, male_line,
             grandmother_female, grandfather_female,
-            grandmother_male, grandmother_male,
+            grandmother_male, grandfather_male,
             marking, insemination1_date, insemination2_date,
             class, selector
          )
