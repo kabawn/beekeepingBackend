@@ -4,13 +4,6 @@ const router = express.Router();
 const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-// How many days until laying check, depending on intro type
-const INTRO_DELAY_DAYS = {
-   cell: 21, // cellule royale
-   virgin: 12, // reine vierge
-   mated: 7, // reine fécondée
-};
-
 // 🔹 Helper: check that apiary belongs to user (uses ONLY apiary_id)
 async function assertApiaryOwnership(apiaryIdParam, userId) {
    const apiaryId = parseInt(apiaryIdParam, 10);
@@ -90,7 +83,6 @@ router.post("/sessions", authenticateUser, async (req, res) => {
          [resolvedApiaryId]
       );
 
-      // ⚠️ Only use owner_user_id if this column exists in your table
       const { rows } = await pool.query(
          `INSERT INTO swarm_sessions (
             owner_user_id, apiary_id, label
@@ -110,10 +102,6 @@ router.post("/sessions", authenticateUser, async (req, res) => {
 });
 
 // 🔹 POST /swarm/sessions/:sessionId/scan  → add hive to this swarm session
-// Body can be:
-//   { "hive_id": 22 }
-// or
-//   { "hive_public_key": "e26add9c-..." }
 // Body can be:
 //   { "hive_id": 22 }
 // or
@@ -154,7 +142,7 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
              FROM hives h
              JOIN apiaries a ON a.apiary_id = h.apiary_id
              WHERE h.public_key = $1
-               AND h.apiary_id = $2         
+               AND h.apiary_id = $2
                AND a.owner_user_id = $3`,
             [hive_public_key, apiaryId, userId]
          );
@@ -243,17 +231,18 @@ router.post("/sessions/:sessionId/scan", authenticateUser, async (req, res) => {
 });
 
 // POST /swarm/sessions/:sessionId/introductions
-// Body: { type: "cell" | "virgin" | "mated", date? }
+// Body: { type: "cell" | "virgin" | "mated", date?, delay_days }
 router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { sessionId } = req.params;
-   const { type, date } = req.body || {};
+   const { type, date, delay_days } = req.body || {};
 
    console.log("🟢 [POST /swarm/sessions/:sessionId/introductions]", {
       userId,
       sessionId,
       type,
       date,
+      delay_days,
    });
 
    const allowedTypes = ["cell", "virgin", "mated"];
@@ -261,9 +250,11 @@ router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, 
       return res.status(400).json({ error: "Invalid type. Must be 'cell', 'virgin' or 'mated'." });
    }
 
-   const delayDays = INTRO_DELAY_DAYS[type];
-   if (!delayDays) {
-      return res.status(500).json({ error: "No delay configured for this type." });
+   const delayDays = parseInt(delay_days, 10);
+   if (!Number.isInteger(delayDays) || delayDays < 1 || delayDays > 60) {
+      return res.status(400).json({
+         error: "Invalid delay_days. It must be an integer between 1 and 60 days.",
+      });
    }
 
    try {
@@ -312,7 +303,7 @@ router.post("/sessions/:sessionId/introductions", authenticateUser, async (req, 
                payload
             )
             VALUES ($1, $2, $3, $4, $5)`,
-            [userId, colId, eventType, eventDate, JSON.stringify({ type })]
+            [userId, colId, eventType, eventDate, JSON.stringify({ type, delay_days: delayDays })]
          );
 
          // 3.b) Update colony status → waiting_check
@@ -415,8 +406,6 @@ router.patch("/colonies/:colonyId/status", authenticateUser, async (req, res) =>
 });
 
 // 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
-// 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
-// 🔹 GET /swarm/sessions/:sessionId  → session + colonies + stats
 router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { sessionId } = req.params;
@@ -465,9 +454,7 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
       const pending = baseStats.by_status["pending"] || 0;
 
       const success_rate =
-         baseStats.total > 0
-            ? Math.round((100 * success / baseStats.total) * 10) / 10
-            : 0;
+         baseStats.total > 0 ? Math.round(100 * (success / baseStats.total) * 10) / 10 : 0;
 
       const stats = {
          total: baseStats.total,
@@ -485,7 +472,6 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
       return res.status(err.status || 500).json({ error: err.message || "Server error" });
    }
 });
-
 
 // PATCH /swarm/sessions/:sessionId/end  → close an active swarm session
 router.patch("/sessions/:sessionId/end", authenticateUser, async (req, res) => {
@@ -519,8 +505,6 @@ router.patch("/sessions/:sessionId/end", authenticateUser, async (req, res) => {
       const closed = rows[0];
       console.log("🟢 Swarm session ended:", closed.swarm_session_id);
 
-      // (optional TODO later: close related open alerts, etc.)
-
       return res.json({ ok: true, session: closed });
    } catch (err) {
       console.error("🔴 PATCH /swarm/sessions/:sessionId/end error:", err);
@@ -529,17 +513,18 @@ router.patch("/sessions/:sessionId/end", authenticateUser, async (req, res) => {
 });
 
 // POST /swarm/colonies/:colonyId/reintroductions
-// Body: { type: "cell" | "virgin" | "mated", date? }
+// Body: { type: "cell" | "virgin" | "mated", date?, delay_days }
 router.post("/colonies/:colonyId/reintroductions", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { colonyId } = req.params;
-   const { type, date } = req.body || {};
+   const { type, date, delay_days } = req.body || {};
 
    console.log("🟢 [POST /swarm/colonies/:colonyId/reintroductions]", {
       userId,
       colonyId,
       type,
       date,
+      delay_days,
    });
 
    const allowedTypes = ["cell", "virgin", "mated"];
@@ -547,9 +532,11 @@ router.post("/colonies/:colonyId/reintroductions", authenticateUser, async (req,
       return res.status(400).json({ error: "Invalid type. Must be 'cell', 'virgin' or 'mated'." });
    }
 
-   const delayDays = INTRO_DELAY_DAYS[type];
-   if (!delayDays) {
-      return res.status(500).json({ error: "No delay configured for this type." });
+   const delayDays = parseInt(delay_days, 10);
+   if (!Number.isInteger(delayDays) || delayDays < 1 || delayDays > 60) {
+      return res.status(400).json({
+         error: "Invalid delay_days. It must be an integer between 1 and 60 days.",
+      });
    }
 
    try {
@@ -592,7 +579,13 @@ router.post("/colonies/:colonyId/reintroductions", authenticateUser, async (req,
             payload
          )
          VALUES ($1, $2, $3, $4, $5)`,
-         [userId, colonyId, eventType, eventDate, JSON.stringify({ type, reintroduction: true })]
+         [
+            userId,
+            colonyId,
+            eventType,
+            eventDate,
+            JSON.stringify({ type, reintroduction: true, delay_days: delayDays }),
+         ]
       );
 
       // 3️⃣ Update colony back to waiting_check
@@ -697,7 +690,6 @@ router.get("/alerts/upcoming", authenticateUser, async (req, res) => {
             h.hive_code,
             h.hive_type,
             h.hive_purpose,
-            -- this already returns an integer number of days
             (sa.planned_for::date - now()::date) AS days_to_check
          FROM swarm_alerts sa
          JOIN apiaries a       ON a.apiary_id = sa.apiary_id
@@ -723,17 +715,16 @@ router.get("/alerts/upcoming", authenticateUser, async (req, res) => {
 
 // 🔹 GET /swarm/stats/overview?from=2025-01-01&to=2025-12-31&apiary_id=79 (optional)
 router.get("/stats/overview", authenticateUser, async (req, res) => {
-  const userId = req.user.id;
-  const { from, to, apiary_id } = req.query;
+   const userId = req.user.id;
+   const { from, to, apiary_id } = req.query;
 
-  // simple defaults
-  const today = new Date().toISOString().slice(0, 10);
-  const fromDate = from || "2025-01-01"; // you can change this later
-  const toDate = to || today;
+   const today = new Date().toISOString().slice(0, 10);
+   const fromDate = from || "2025-01-01"; // you can change this later
+   const toDate = to || today;
 
-  try {
-    // 1️⃣ Global stats
-    const globalSql = `
+   try {
+      // 1️⃣ Global stats
+      const globalSql = `
       SELECT
         COUNT(*) AS total_colonies,
         COUNT(*) FILTER (WHERE c.status = 'laying_ok') AS success,
@@ -745,20 +736,18 @@ router.get("/stats/overview", authenticateUser, async (req, res) => {
         ${apiary_id ? "AND c.apiary_id = $4" : ""}
     `;
 
-    const globalParams = apiary_id
-      ? [userId, fromDate, toDate, apiary_id]
-      : [userId, fromDate, toDate];
+      const globalParams = apiary_id
+         ? [userId, fromDate, toDate, apiary_id]
+         : [userId, fromDate, toDate];
 
-    const { rows: globalRows } = await pool.query(globalSql, globalParams);
-    const g = globalRows[0] || { total_colonies: 0, success: 0, failures: 0 };
+      const { rows: globalRows } = await pool.query(globalSql, globalParams);
+      const g = globalRows[0] || { total_colonies: 0, success: 0, failures: 0 };
 
-    const globalSuccessRate =
-      g.total_colonies > 0
-        ? Math.round((100 * g.success / g.total_colonies) * 10) / 10
-        : 0;
+      const globalSuccessRate =
+         g.total_colonies > 0 ? Math.round(100 * (g.success / g.total_colonies) * 10) / 10 : 0;
 
-    // 2️⃣ Stats by intro type (cell / virgin / mated)
-    const introSql = `
+      // 2️⃣ Stats by intro type (cell / virgin / mated)
+      const introSql = `
       SELECT
         e.payload->>'type' AS intro_type,
         COUNT(DISTINCT c.swarm_colony_id) AS total_colonies,
@@ -774,27 +763,26 @@ router.get("/stats/overview", authenticateUser, async (req, res) => {
       ORDER BY intro_type;
     `;
 
-    const { rows: introRows } = await pool.query(introSql, globalParams);
+      const { rows: introRows } = await pool.query(introSql, globalParams);
 
-    const byIntro = introRows.map(r => {
-      const total = Number(r.total_colonies);
-      const success = Number(r.success);
-      const success_rate =
-        total > 0 ? Math.round((100 * success / total) * 10) / 10 : 0;
+      const byIntro = introRows.map((r) => {
+         const total = Number(r.total_colonies);
+         const success = Number(r.success);
+         const success_rate = total > 0 ? Math.round(100 * (success / total) * 10) / 10 : 0;
 
-      return {
-        intro_type: r.intro_type, // 'cell' | 'virgin' | 'mated'
-        total,
-        success,
-        success_rate,
-      };
-    });
+         return {
+            intro_type: r.intro_type, // 'cell' | 'virgin' | 'mated'
+            total,
+            success,
+            success_rate,
+         };
+      });
 
-    // 3️⃣ Stats by apiary (only if not filtering by one apiary)
-    let byApiary = [];
+      // 3️⃣ Stats by apiary (only if not filtering by one apiary)
+      let byApiary = [];
 
-    if (!apiary_id) {
-      const apiarySql = `
+      if (!apiary_id) {
+         const apiarySql = `
         SELECT
           c.apiary_id,
           a.apiary_name,
@@ -809,39 +797,37 @@ router.get("/stats/overview", authenticateUser, async (req, res) => {
         ORDER BY a.apiary_name;
       `;
 
-      const { rows } = await pool.query(apiarySql, [userId, fromDate, toDate]);
-      byApiary = rows.map(r => {
-        const total = Number(r.total_colonies);
-        const success = Number(r.success);
-        const success_rate =
-          total > 0 ? Math.round((100 * success / total) * 10) / 10 : 0;
+         const { rows } = await pool.query(apiarySql, [userId, fromDate, toDate]);
+         byApiary = rows.map((r) => {
+            const total = Number(r.total_colonies);
+            const success = Number(r.success);
+            const success_rate = total > 0 ? Math.round(100 * (success / total) * 10) / 10 : 0;
 
-        return {
-          apiary_id: r.apiary_id,
-          apiary_name: r.apiary_name,
-          total,
-          success,
-          success_rate,
-        };
+            return {
+               apiary_id: r.apiary_id,
+               apiary_name: r.apiary_name,
+               total,
+               success,
+               success_rate,
+            };
+         });
+      }
+
+      return res.json({
+         period: { from: fromDate, to: toDate, apiary_id: apiary_id || null },
+         global: {
+            total_colonies: Number(g.total_colonies || 0),
+            success: Number(g.success || 0),
+            failures: Number(g.failures || 0),
+            success_rate: globalSuccessRate,
+         },
+         by_intro_type: byIntro,
+         by_apiary: byApiary,
       });
-    }
-
-    return res.json({
-      period: { from: fromDate, to: toDate, apiary_id: apiary_id || null },
-      global: {
-        total_colonies: Number(g.total_colonies || 0),
-        success: Number(g.success || 0),
-        failures: Number(g.failures || 0),
-        success_rate: globalSuccessRate,
-      },
-      by_intro_type: byIntro,
-      by_apiary: byApiary,
-    });
-  } catch (err) {
-    console.error("🔴 GET /swarm/stats/overview error:", err);
-    return res.status(500).json({ error: "Server error" });
-  }
+   } catch (err) {
+      console.error("🔴 GET /swarm/stats/overview error:", err);
+      return res.status(500).json({ error: "Server error" });
+   }
 });
-
 
 module.exports = router;
