@@ -198,4 +198,218 @@ router.get("/evaluations-long", authenticateUser, async (req, res) => {
   }
 });
 
+
+// GET /analytics/evaluations-long/export
+// Returns a CSV file ready for Excel (one line per evaluation "metric")
+router.get("/evaluations-long/export", authenticateUser, async (req, res) => {
+  const userId = req.user.id;
+  const { year, apiary_id, hive_id } = req.query || {};
+
+  try {
+    // 🧠 Same base query as /evaluations-long (copy/paste logic)
+    const params = [userId];
+    let idx = params.length + 1;
+
+    let where = `
+      a.owner_user_id = $1
+    `;
+
+    // optional: filter by year (on eval_date)
+    if (year) {
+      where += ` AND EXTRACT(YEAR FROM e.eval_date) = $${idx++}`;
+      params.push(Number(year));
+    }
+
+    // optional: filter by apiary
+    if (apiary_id) {
+      where += ` AND e.apiary_id = $${idx++}`;
+      params.push(Number(apiary_id));
+    }
+
+    // optional: filter by hive
+    if (hive_id) {
+      where += ` AND e.hive_id = $${idx++}`;
+      params.push(Number(hive_id));
+    }
+
+    const sql = `
+      SELECT
+        e.eval_date AS date,
+        a.apiary_name AS rucher,
+        h.hive_code AS caisse,
+        d.queen_line AS souche,
+        e.hive_id::text AS colonie,
+        e.eval_type,
+        e.season_label,
+        e.honey_yield_kg,
+        e.brood_frames,
+        e.food_frames,
+        e.population_score,
+        e.temperament_score,
+        e.varroa_level,
+        e.swarming_tendency,
+        e.migration_used,
+        e.feeding_done,
+        e.treatment_type,
+        e.notes
+      FROM hive_evaluations e
+      JOIN apiaries a ON a.apiary_id = e.apiary_id
+      JOIN hives h ON h.hive_id = e.hive_id
+      LEFT JOIN hive_descriptors d
+        ON d.hive_id = e.hive_id
+       AND d.year = EXTRACT(YEAR FROM e.eval_date)::int
+      WHERE ${where}
+      ORDER BY e.eval_date, h.hive_code, e.hive_id
+    `;
+
+    const { rows } = await pool.query(sql, params);
+
+    // 🧩 Map DB fields to "long" lines
+    const FIELDS = [
+      {
+        key: "honey_yield_kg",
+        label_fr: "Production miel (Kg)",
+        label_en: "Honey yield (kg)",
+        getValue: (r) => r.honey_yield_kg,
+      },
+      {
+        key: "brood_frames",
+        label_fr: "Cadres de couvain",
+        label_en: "Brood frames",
+        getValue: (r) => r.brood_frames,
+      },
+      {
+        key: "food_frames",
+        label_fr: "Cadres de nourriture",
+        label_en: "Food frames",
+        getValue: (r) => r.food_frames,
+      },
+      {
+        key: "population_score",
+        label_fr: "Force de population (1–4)",
+        label_en: "Population score (1–4)",
+        getValue: (r) => r.population_score,
+      },
+      {
+        key: "temperament_score",
+        label_fr: "Tempérament (1–4, 1 = calme, 4 = agressif)",
+        label_en: "Temperament (1–4, 1 = calm, 4 = aggressive)",
+        getValue: (r) => r.temperament_score,
+      },
+      {
+        key: "varroa_level",
+        label_fr: "Niveau de varroa",
+        label_en: "Varroa level",
+        getValue: (r) => r.varroa_level,
+      },
+      {
+        key: "swarming_tendency",
+        label_fr: "Tendance à l’essaimage (0–4)",
+        label_en: "Swarming tendency (0–4)",
+        getValue: (r) => r.swarming_tendency,
+      },
+      {
+        key: "migration_used",
+        label_fr: "Transhumance utilisée (0/1)",
+        label_en: "Migration used (0/1)",
+        getValue: (r) => (r.migration_used ? 1 : 0),
+      },
+      {
+        key: "feeding_done",
+        label_fr: "Nourrissement effectué (0/1)",
+        label_en: "Feeding done (0/1)",
+        getValue: (r) => (r.feeding_done ? 1 : 0),
+      },
+    ];
+
+    const longRows = [];
+
+    for (const r of rows) {
+      for (const f of FIELDS) {
+        const v = f.getValue(r);
+        if (v === null || v === undefined || v === "") continue;
+
+        const infoParts = [];
+        if (r.eval_type) infoParts.push(r.eval_type);
+        if (r.season_label) infoParts.push(r.season_label);
+        if (r.treatment_type)
+          infoParts.push(`Traitement: ${r.treatment_type}`);
+        if (r.notes) infoParts.push(r.notes);
+
+        const info_complement = infoParts.join(" | ");
+
+        longRows.push({
+          date: r.date,
+          rucher: r.rucher,
+          caisse: r.caisse,
+          souche: r.souche || "",
+          colonie: r.colonie,
+          evaluation_label_fr: f.label_fr,
+          valeur: v,
+          info_complement,
+        });
+      }
+    }
+
+    // 🧾 Build CSV (semicolon for FR Excel)
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return "";
+      const s = String(val);
+      // double quotes escape
+      const escaped = s.replace(/"/g, '""');
+      return `"${escaped}"`;
+    };
+
+    const header = [
+      "Date",
+      "Rucher",
+      "Caisse",
+      "Souche",
+      "Colonie",
+      "Évaluation",
+      "Valeur",
+      "Info complément",
+    ];
+
+    const lines = [];
+    lines.push(header.map(escapeCsv).join(";"));
+
+    for (const row of longRows) {
+      lines.push(
+        [
+          row.date ? new Date(row.date).toISOString().split("T")[0] : "",
+          row.rucher,
+          row.caisse,
+          row.souche,
+          row.colonie,
+          row.evaluation_label_fr,
+          row.valeur,
+          row.info_complement,
+        ]
+          .map(escapeCsv)
+          .join(";")
+      );
+    }
+
+    const csv = lines.join("\n");
+
+    const fileName = `bee_evaluations_${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${fileName}"`
+    );
+    return res.status(200).send(csv);
+  } catch (err) {
+    console.error("🔴 GET /analytics/evaluations-long/export error:", err);
+    return res
+      .status(500)
+      .json({ error: "Server error while exporting evaluations CSV" });
+  }
+});
+
+
 module.exports = router;
