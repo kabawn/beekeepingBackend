@@ -772,4 +772,107 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
    }
 });
 
+// ---------------- BREEDERS CRUD ----------------
+
+// GET /queen/breeders
+router.get("/breeders", async (req, res) => {
+   const ownerId = req.user.id;
+
+   try {
+      const { rows } = await pool.query(
+         `
+         SELECT *
+         FROM queen_breeders
+         WHERE owner_id = $1
+         ORDER BY code ASC
+         `,
+         [ownerId]
+      );
+      res.json({ breeders: rows });
+   } catch (err) {
+      console.error("Error fetching queen breeders:", err);
+      res.status(500).json({ error: "Error fetching queen breeders" });
+   }
+});
+
+// POST /queen/breeders
+router.post("/breeders", async (req, res) => {
+   const ownerId = req.user.id;
+   const { code, name } = req.body;
+
+   if (!code) {
+      return res.status(400).json({ error: "code is required" });
+   }
+
+   try {
+      const { rows } = await pool.query(
+         `
+         INSERT INTO queen_breeders (owner_id, code, name)
+         VALUES ($1, $2, $3)
+         RETURNING *
+         `,
+         [ownerId, code, name || null]
+      );
+
+      res.status(201).json({ breeder: rows[0] });
+   } catch (err) {
+      console.error("Error creating queen breeder:", err);
+      res.status(500).json({ error: "Error creating queen breeder" });
+   }
+});
+
+// PUT /queen/breeders/:id
+router.put("/breeders/:id", async (req, res) => {
+   const ownerId = req.user.id;
+   const breederId = req.params.id;
+   const { code, name } = req.body;
+
+   try {
+      const { rows } = await pool.query(
+         `
+         UPDATE queen_breeders
+         SET
+            code = COALESCE($3, code),
+            name = COALESCE($4, name),
+            updated_at = NOW()
+         WHERE id = $1 AND owner_id = $2
+         RETURNING *
+         `,
+         [breederId, ownerId, code, name]
+      );
+
+      if (!rows.length) {
+         return res.status(404).json({ error: "Breeder not found" });
+      }
+
+      res.json({ breeder: rows[0] });
+   } catch (err) {
+      console.error("Error updating queen breeder:", err);
+      res.status(500).json({ error: "Error updating queen breeder" });
+   }
+});
+
+// DELETE /queen/breeders/:id
+router.delete("/breeders/:id", async (req, res) => {
+   const ownerId = req.user.id;
+   const breederId = req.params.id;
+
+   try {
+      const { rowCount } = await pool.query(
+         `DELETE FROM queen_breeders WHERE id = $1 AND owner_id = $2`,
+         [breederId, ownerId]
+      );
+
+      if (!rowCount) {
+         return res.status(404).json({ error: "Breeder not found" });
+      }
+
+      res.json({ success: true });
+   } catch (err) {
+      console.error("Error deleting queen breeder:", err);
+      res.status(500).json({ error: "Error deleting queen breeder" });
+   }
+});
+
+
 module.exports = router;
