@@ -579,16 +579,25 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
       const pageWidth = 595.28; // A4 portrait in points
       const pageHeight = 841.89;
 
-      // 70 x 25 mm → ~198 x 71 points
-      const labelW = 198;
-      const labelH = 71;
+      // ----- GRID CONFIG ----------------------------------------------------
       const cols = 3;
       const rowsPerPage = 11;
       const labelsPerPage = cols * rowsPerPage;
 
+      // Vertical
       const marginTop = 30;
-      const marginLeft = 10;
-      const colGap = 1;
+      const labelH = 71; // ~25 mm
+
+      // Horizontal – we compute label width to keep equal left/right margins
+      const sideMargin = 10; // same on left and right
+      const colGap = 5; // space between columns
+
+      // available width for all labels (inside page margins & gaps)
+      const availableWidth = pageWidth - 2 * sideMargin - (cols - 1) * colGap;
+      const labelW = availableWidth / cols;
+
+      // effective left margin used in positioning
+      const marginLeft = sideMargin;
 
       const textColor = rgb(0, 0, 0);
 
@@ -609,14 +618,13 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          const x = marginLeft + col * (labelW + colGap);
          const yTop = pageHeight - marginTop - row * labelH;
 
-         // --- Parent formatting --------------------------------
+         // --- Parent formatting --------------------------------------------
          const parentsCore =
             cell.female_line || cell.male_line
                ? `${cell.female_line || "?"} x ${cell.male_line || "?"}`
                : "";
          const parentsLine = parentsCore ? `[ ${parentsCore} ]` : "";
 
-         // (grandparents are kept only for QR, not printed)
          const graftDateShort = formatFR(cell.graft_date);
          const layingShort = formatFR(cell.date_laying_expected);
 
@@ -629,8 +637,7 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
 
          const rucherLine = `Ruchers de Cocagne - ${cell.season}`;
 
-         // ----------------------------------------------------------------------
-         // Label background
+         // --- Label background ---------------------------------------------
          page.drawRectangle({
             x,
             y: yTop - labelH,
@@ -641,7 +648,7 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
             borderWidth: 0.5,
          });
 
-         // Text block (left side)
+         // --- Text block (left side) ---------------------------------------
          const textX = x + 8;
          let textY = yTop - 16;
 
@@ -688,7 +695,7 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
             color: textColor,
          });
 
-         // --- QR code (right side) -------------------------------------------
+         // --- QR code (right side) -----------------------------------------
          const qrPayload =
             typeof cell.qr_payload === "string"
                ? cell.qr_payload
@@ -701,10 +708,11 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          const qrImage = await pdfDoc.embedPng(qrBuffer);
 
          const qrSize = 50; // smaller to give more air
+         // keep 10pt internal padding to the right edge of label
          const qrX = x + labelW - qrSize - 10;
          const qrY = yTop - labelH + 6;
 
-         // 5) Breeder label above QR:  > Z841 – Jean-François <
+         // 5) Breeder label above QR:  > Z841 <
          const hasCode = !!cell.breeder_code;
          const hasName = !!cell.breeder_name;
          if (hasCode || hasName) {
