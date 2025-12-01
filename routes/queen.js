@@ -520,6 +520,8 @@ router.get("/grafts/lines/:lineId/cells", async (req, res) => {
 // GET /queen/grafts/lines/:lineId/cells/labels.pdf
 // GET /queen/grafts/lines/:lineId/cells/labels.pdf
 // Export A4 sheet of labels (33 per page, 25x70mm) with QR code
+// GET /queen/grafts/lines/:lineId/cells/labels.pdf
+// Export A4 sheet of labels (33 per page, 25x70mm) with QR code
 router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
    const ownerId = req.user.id;
    const lineId = req.params.lineId;
@@ -607,33 +609,14 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          const x = marginLeft + col * (labelW + colGap);
          const yTop = pageHeight - marginTop - row * labelH;
 
-         // --- Parent & grand-parent formatting --------------------------------
+         // --- Parent formatting --------------------------------
          const parentsCore =
             cell.female_line || cell.male_line
                ? `${cell.female_line || "?"} x ${cell.male_line || "?"}`
                : "";
          const parentsLine = parentsCore ? `[ ${parentsCore} ]` : "";
 
-         const gpParts = [];
-         if (cell.grandmother_female || cell.grandfather_female) {
-            gpParts.push(
-               `[${cell.grandmother_female || "?"} x ${cell.grandfather_female || "?"}]`
-            );
-         }
-         if (cell.grandmother_male || cell.grandfather_male) {
-            gpParts.push(
-               `[${cell.grandmother_male || "?"} x ${cell.grandfather_male || "?"}]`
-            );
-         }
-
-         let grandparentsLine = "";
-         if (gpParts.length === 2) {
-            // { [GMF x GFF] * [GMM x GMF] }
-            grandparentsLine = `{ ${gpParts[0]} * ${gpParts[1]} }`;
-         } else if (gpParts.length === 1) {
-            grandparentsLine = `{ ${gpParts[0]} }`;
-         }
-
+         // (grandparents are kept only for QR, not printed)
          const graftDateShort = formatFR(cell.graft_date);
          const layingShort = formatFR(cell.date_laying_expected);
 
@@ -643,10 +626,6 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
                : graftDateShort
                ? `Greffage : ${graftDateShort}`
                : "";
-
-         const lotText = `Lot : ${cell.full_lot_number || cell.lot_code || ""}  ·  Cell #${
-            cell.cell_index
-         }`;
 
          const rucherLine = `Ruchers de Cocagne - ${cell.season}`;
 
@@ -685,43 +664,10 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
                font,
                color: textColor,
             });
-            textY -= 10;
+            textY -= 11;
          }
 
-         // 3) Grandparents line { [Z500 x Z482] * [Z320 x Z301] }
-         if (grandparentsLine) {
-            page.drawText(grandparentsLine, {
-               x: textX,
-               y: textY,
-               size: 7,
-               font,
-               color: textColor,
-            });
-            textY -= 10;
-         }
-
-         // 4) Breeder line  > Z841 – Jean-François <
-         const hasCode = !!cell.breeder_code;
-         const hasName = !!cell.breeder_name;
-         if (hasCode || hasName) {
-            let breederLabel;
-            if (hasCode && hasName) {
-               breederLabel = `> ${cell.breeder_code} – ${cell.breeder_name} <`;
-            } else {
-               breederLabel = `> ${cell.breeder_code || cell.breeder_name} <`;
-            }
-
-            page.drawText(breederLabel, {
-               x: textX,
-               y: textY,
-               size: 7,
-               font,
-               color: textColor,
-            });
-            textY -= 9;
-         }
-
-         // 5) Greffage line
+         // 3) Greffage line
          if (greffText) {
             page.drawText(greffText, {
                x: textX,
@@ -733,21 +679,11 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
             textY -= 11;
          }
 
-         // 6) Lot + Cell index
-         page.drawText(lotText, {
-            x: textX,
-            y: textY,
-            size: 7,
-            font,
-            color: textColor,
-         });
-         textY -= 11;
-
-         // 7) Rucher + season
+         // 4) Rucher + season
          page.drawText(rucherLine, {
             x: textX,
             y: textY,
-            size: 7,
+            size: 8,
             font,
             color: textColor,
          });
@@ -764,10 +700,37 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          });
          const qrImage = await pdfDoc.embedPng(qrBuffer);
 
-         const qrSize = 58; // a bit smaller to breathe
+         const qrSize = 50; // smaller to give more air
          const qrX = x + labelW - qrSize - 10;
          const qrY = yTop - labelH + 6;
 
+         // 5) Breeder label above QR:  > Z841 – Jean-François <
+         const hasCode = !!cell.breeder_code;
+         const hasName = !!cell.breeder_name;
+         if (hasCode || hasName) {
+            let breederLabel;
+            if (hasCode && hasName) {
+               breederLabel = `> ${cell.breeder_code} – ${cell.breeder_name} <`;
+            } else {
+               breederLabel = `> ${cell.breeder_code || cell.breeder_name} <`;
+            }
+
+            const breederFontSize = 7;
+            const breederWidth = font.widthOfTextAtSize(breederLabel, breederFontSize);
+            // center over QR
+            const breederX = qrX + (qrSize - breederWidth) / 2;
+            const breederY = yTop - 10;
+
+            page.drawText(breederLabel, {
+               x: breederX,
+               y: breederY,
+               size: breederFontSize,
+               font,
+               color: textColor,
+            });
+         }
+
+         // draw QR
          page.drawImage(qrImage, {
             x: qrX,
             y: qrY,
@@ -779,10 +742,7 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
       const pdfBytes = await pdfDoc.save();
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-         "Content-Disposition",
-         `attachment; filename=queen_cells_labels_${lineId}.pdf`
-      );
+      res.setHeader("Content-Disposition", `attachment; filename=queen_cells_labels_${lineId}.pdf`);
       return res.send(Buffer.from(pdfBytes));
    } catch (err) {
       console.error("Error generating labels PDF:", err);
@@ -891,6 +851,5 @@ router.delete("/breeders/:id", async (req, res) => {
       res.status(500).json({ error: "Error deleting queen breeder" });
    }
 });
-
 
 module.exports = router;
