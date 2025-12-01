@@ -710,9 +710,9 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          if (hasCode || hasName) {
             let breederLabel;
             if (hasCode && hasName) {
-               breederLabel = `> ${cell.breeder_code} – ${cell.breeder_name} <`;
+               breederLabel = `> ${cell.breeder_code} <`;
             } else {
-               breederLabel = `> ${cell.breeder_code || cell.breeder_name} <`;
+               breederLabel = `> ${cell.breeder_code} <`;
             }
 
             const breederFontSize = 7;
