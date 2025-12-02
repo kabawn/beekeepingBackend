@@ -237,6 +237,43 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
    }
 });
 
+// 🔍 Get current queen for a hive
+// GET /queens/by-hive/:hive_id
+router.get("/by-hive/:hive_id", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const hiveId = parseInt(req.params.hive_id, 10);
+
+   if (!hiveId || Number.isNaN(hiveId)) {
+      return res.status(400).json({ error: "Invalid hive_id" });
+   }
+
+   try {
+      const { data, error } = await supabase
+         .from("queens")
+         .select("*")
+         .eq("owner_user_id", userId)
+         .eq("hive_id", hiveId)
+         .eq("is_alive", true)
+         .order("created_at", { ascending: false })
+         .limit(1)
+         .maybeSingle();
+
+      if (error) {
+         console.error("Error fetching queen by hive:", error);
+         return res.status(500).json({ error: "Failed to fetch queen for hive" });
+      }
+
+      if (!data) {
+         return res.status(200).json({ queen: null });
+      }
+
+      return res.status(200).json({ queen: data });
+   } catch (err) {
+      console.error("Unexpected error in GET /queens/by-hive:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 // 🖼️ تحميل صورة QR لملكة
 // هذا المسار ممكن يظل عام لأنه فقط لطباعة اللاصق
 router.get("/qr-download/:public_key", async (req, res) => {
