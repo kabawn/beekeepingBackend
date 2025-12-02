@@ -417,22 +417,38 @@ router.get("/sessions/:sessionId", authenticateUser, async (req, res) => {
 
       const { rows: colonies } = await pool.query(
          `SELECT 
-             c.*,
-             h.hive_code,
-             h.hive_type,
-             h.hive_purpose,
-             a.planned_for,
-             -- nombre de jours restants jusqu'au contrôle de ponte
-             (a.planned_for::date - NOW()::date) AS days_to_check
-          FROM swarm_colonies c
-          JOIN hives h ON h.hive_id = c.hive_id
-          LEFT JOIN swarm_alerts a
-             ON a.swarm_colony_id = c.swarm_colony_id
-            AND a.alert_type = 'check_laying'
-            AND a.is_done = FALSE
-          WHERE c.swarm_session_id = $1
-          ORDER BY c.started_at DESC`,
-         [sessionId]
+       c.*,
+       h.hive_code,
+       h.hive_type,
+       h.hive_purpose,
+       a.planned_for,
+       (a.planned_for::date - NOW()::date) AS days_to_check,
+
+       -- 🟣 queen info (alive queen on this hive)
+       q.queen_id,
+       q.queen_code,
+       q.source_type,
+       q.source_cell_lot,
+       q.grafting_date,
+       q.public_key AS queen_public_key
+
+    FROM swarm_colonies c
+    JOIN hives h 
+      ON h.hive_id = c.hive_id
+
+    LEFT JOIN swarm_alerts a
+      ON a.swarm_colony_id = c.swarm_colony_id
+     AND a.alert_type = 'check_laying'
+     AND a.is_done = FALSE
+
+    LEFT JOIN queens q
+      ON q.hive_id = h.hive_id
+     AND q.is_alive = TRUE      -- only current queen
+     AND q.owner_user_id = $2   -- safety: same owner
+
+    WHERE c.swarm_session_id = $1
+    ORDER BY c.started_at DESC`,
+         [sessionId, userId]
       );
 
       // 🧮 Build stats
