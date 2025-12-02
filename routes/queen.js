@@ -905,4 +905,201 @@ router.delete("/breeders/:id", async (req, res) => {
    }
 });
 
+// ---------------- ANALYTICS DASHBOARD ----------------
+//
+// GET /queen/analytics/dashboard?season=2025&days_ahead=21
+//
+router.get("/analytics/dashboard", async (req, res) => {
+   const ownerId = req.user.id;
+   const seasonParam = req.query.season ? parseInt(req.query.season, 10) : null;
+   const daysAheadParam = req.query.days_ahead ? parseInt(req.query.days_ahead, 10) : 21;
+
+   try {
+      // 1️⃣ Season overview (totals)
+      const overviewRes = await pool.query(
+         `
+         SELECT
+            gs.season,
+            COUNT(DISTINCT gs.id) AS grafts_count,
+            COUNT(gl.id)         AS lines_count,
+            COALESCE(SUM(gl.cells_grafted), 0)   AS total_cells_grafted,
+            COALESCE(SUM(gl.cells_accepted), 0)  AS total_cells_accepted
+         FROM queen_graft_sessions gs
+         LEFT JOIN queen_graft_lines gl ON gl.session_id = gs.id
+         WHERE gs.owner_id = $1
+           AND ($2::int IS NULL OR gs.season = $2::int)
+         GROUP BY gs.season
+         ORDER BY gs.season DESC
+         `,
+         [ownerId, seasonParam]
+      );
+
+      let seasonOverview = null;
+      if (overviewRes.rows.length > 0) {
+         const row = overviewRes.rows[0];
+         const accepted = Number(row.total_cells_accepted) || 0;
+         const grafted = Number(row.total_cells_grafted) || 0;
+         const acceptanceRate = grafted > 0 ? (accepted / grafted) * 100 : 0;
+
+         seasonOverview = {
+            season: row.season,
+            grafts_count: Number(row.grafts_count),
+            lines_count: Number(row.lines_count),
+            total_cells_grafted: grafted,
+            total_cells_accepted: accepted,
+            acceptance_rate: Math.round(acceptanceRate * 10) / 10,
+         };
+      }
+
+      // 2️⃣ Per graft sessions (for timeline & comparison)
+      const perGraftRes = await pool.query(
+         `
+         SELECT
+            gs.id,
+            gs.graft_date,
+            gs.graft_index_season,
+            gs.graft_day_of_year,
+            COALESCE(SUM(gl.cells_grafted), 0)   AS total_cells_grafted,
+            COALESCE(SUM(gl.cells_accepted), 0)  AS total_cells_accepted
+         FROM queen_graft_sessions gs
+         LEFT JOIN queen_graft_lines gl ON gl.session_id = gs.id
+         WHERE gs.owner_id = $1
+           AND ($2::int IS NULL OR gs.season = $2::int)
+         GROUP BY gs.id
+         ORDER BY gs.graft_date DESC
+         `,
+         [ownerId, seasonParam]
+      );
+
+      const perGraft = perGraftRes.rows.map((row) => {
+         const g = Number(row.total_cells_grafted) || 0;
+         const a = Number(row.total_cells_accepted) || 0;
+         const rate = g > 0 ? (a / g) * 100 : 0;
+         return {
+            session_id: row.id,
+            graft_date: row.graft_date,
+            graft_index_season: row.graft_index_season,
+            graft_day_of_year: row.graft_day_of_year,
+            total_cells_grafted: g,
+            total_cells_accepted: a,
+            acceptance_rate: Math.round(rate * 10) / 10,
+         };
+      });
+
+      // 3️⃣ Per strain performance
+      const perStrainRes = await pool.query(
+         `
+         SELECT
+            s.id,
+            s.name,
+            s.season,
+            COALESCE(SUM(gl.cells_grafted), 0)   AS total_cells_grafted,
+            COALESCE(SUM(gl.cells_accepted), 0)  AS total_cells_accepted
+         FROM queen_graft_lines gl
+         JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+         JOIN queen_strains s ON s.id = gl.strain_id
+         WHERE gs.owner_id = $1
+           AND ($2::int IS NULL OR gs.season = $2::int)
+         GROUP BY s.id, s.name, s.season
+         ORDER BY s.season DESC, s.name ASC
+         `,
+         [ownerId, seasonParam]
+      );
+
+      const perStrain = perStrainRes.rows.map((row) => {
+         const g = Number(row.total_cells_grafted) || 0;
+         const a = Number(row.total_cells_accepted) || 0;
+         const rate = g > 0 ? (a / g) * 100 : 0;
+         return {
+            strain_id: row.id,
+            strain_name: row.name,
+            season: row.season,
+            total_cells_grafted: g,
+            total_cells_accepted: a,
+            acceptance_rate: Math.round(rate * 10) / 10,
+         };
+      });
+
+      // 4️⃣ Calendar – upcoming G10 / Emergence / Laying (next X days)
+      const calendarRes = await pool.query(
+         `
+         SELECT type, event_date, lines_count, cells_grafted, cells_accepted
+         FROM (
+            -- G10
+            SELECT
+               'G10'::text AS type,
+               gl.date_g10 AS event_date,
+               COUNT(*)    AS lines_count,
+               COALESCE(SUM(gl.cells_grafted), 0)  AS cells_grafted,
+               COALESCE(SUM(gl.cells_accepted), 0) AS cells_accepted
+            FROM queen_graft_lines gl
+            JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+            WHERE gs.owner_id = $1
+              AND gl.date_g10 IS NOT NULL
+              AND gl.date_g10 >= CURRENT_DATE
+              AND gl.date_g10 < CURRENT_DATE + ($3::int || ' days')::interval
+              AND ($2::int IS NULL OR gs.season = $2::int)
+            GROUP BY gl.date_g10
+
+            UNION ALL
+
+            -- Emergence
+            SELECT
+               'emergence'::text AS type,
+               gl.date_emergence AS event_date,
+               COUNT(*)    AS lines_count,
+               COALESCE(SUM(gl.cells_grafted), 0)  AS cells_grafted,
+               COALESCE(SUM(gl.cells_accepted), 0) AS cells_accepted
+            FROM queen_graft_lines gl
+            JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+            WHERE gs.owner_id = $1
+              AND gl.date_emergence IS NOT NULL
+              AND gl.date_emergence >= CURRENT_DATE
+              AND gl.date_emergence < CURRENT_DATE + ($3::int || ' days')::interval
+              AND ($2::int IS NULL OR gs.season = $2::int)
+            GROUP BY gl.date_emergence
+
+            UNION ALL
+
+            -- Laying
+            SELECT
+               'laying'::text AS type,
+               gl.date_laying_expected AS event_date,
+               COUNT(*)    AS lines_count,
+               COALESCE(SUM(gl.cells_grafted), 0)  AS cells_grafted,
+               COALESCE(SUM(gl.cells_accepted), 0) AS cells_accepted
+            FROM queen_graft_lines gl
+            JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+            WHERE gs.owner_id = $1
+              AND gl.date_laying_expected IS NOT NULL
+              AND gl.date_laying_expected >= CURRENT_DATE
+              AND gl.date_laying_expected < CURRENT_DATE + ($3::int || ' days')::interval
+              AND ($2::int IS NULL OR gs.season = $2::int)
+            GROUP BY gl.date_laying_expected
+         ) AS events
+         ORDER BY event_date ASC, type ASC
+         `,
+         [ownerId, seasonParam, daysAheadParam]
+      );
+
+      const calendar = calendarRes.rows.map((row) => ({
+         type: row.type, // 'G10' | 'emergence' | 'laying'
+         date: row.event_date,
+         lines_count: Number(row.lines_count) || 0,
+         cells_grafted: Number(row.cells_grafted) || 0,
+         cells_accepted: Number(row.cells_accepted) || 0,
+      }));
+
+      res.json({
+         season_overview: seasonOverview,
+         per_graft: perGraft,
+         per_strain: perStrain,
+         calendar,
+      });
+   } catch (err) {
+      console.error("Error in /queen/analytics/dashboard:", err);
+      res.status(500).json({ error: "Error generating queen analytics dashboard" });
+   }
+});
+
 module.exports = router;
