@@ -7,6 +7,25 @@ const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
+// 🔹 Helper: get opalite color from season (international marking system)
+function getOpaliteColorFromSeason(season) {
+   if (!season) return null;
+   const lastDigit = Number(String(season).slice(-1));
+
+   // 1 or 6 → white
+   if (lastDigit === 1 || lastDigit === 6) return "white";
+   // 2 or 7 → yellow
+   if (lastDigit === 2 || lastDigit === 7) return "yellow";
+   // 3 or 8 → red
+   if (lastDigit === 3 || lastDigit === 8) return "red";
+   // 4 or 9 → green
+   if (lastDigit === 4 || lastDigit === 9) return "green";
+   // 5 or 0 → blue
+   if (lastDigit === 5 || lastDigit === 0) return "blue";
+
+   return null;
+}
+
 // 👑 إنشاء ملكة جديدة
 router.post("/", authenticateUser, async (req, res) => {
    const {
@@ -104,6 +123,8 @@ router.post("/", authenticateUser, async (req, res) => {
 
 // 👑 Create a queen from a grafted cell QR
 // body: { hive_id, qr_payload, forceReplace? }
+// 👑 Create a queen from a grafted cell QR
+// body: { hive_id, qr_payload, forceReplace? }
 router.post("/from-cell", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { hive_id, qr_payload, forceReplace = false } = req.body;
@@ -126,6 +147,11 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
       const cellLot = data.cell_lot || data.full_lot_number || data.full_lot || null; // be tolerant
       const strainName = data.strain || data.strain_name || null;
       const graftingDate = data.graft_date || null;
+
+      // 🔹 Derive season and opalite color
+      const season = data.season || (graftingDate ? new Date(graftingDate).getFullYear() : null);
+
+      const opaliteColor = getOpaliteColorFromSeason(season);
 
       // 2️⃣ Check if this hive already has a queen for this user (same logic as your old code)
       const { data: existingQueen, error: checkError } = await supabase
@@ -184,7 +210,7 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
                public_key: publicKey,
                grafting_date: graftingDate,
                strain_name: strainName,
-               opalite_color: null, // can be filled later if you want
+               opalite_color: opaliteColor, // 🔹 now auto-filled from season
                expected_traits: null,
                hive_id,
                owner_user_id: userId,
