@@ -29,13 +29,39 @@ function pad(num, size) {
    return s;
 }
 
+async function getNextLineIndexForDay(ownerId, season, dayOfYear, client = pool) {
+   const { rows } = await client.query(
+      `
+      SELECT gl.lot_code
+      FROM queen_graft_lines gl
+      JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+      WHERE gs.owner_id = $1
+        AND gs.season = $2
+        AND gs.graft_day_of_year = $3
+      `,
+      [ownerId, season, dayOfYear]
+   );
+
+   let maxIndex = 0;
+
+   for (const r of rows) {
+      if (!r.lot_code) continue;
+      const parts = String(r.lot_code).split(".");
+      const last = parseInt(parts[2], 10); // YY.DDD.LgGref
+      if (!Number.isNaN(last) && last > maxIndex) {
+         maxIndex = last;
+      }
+   }
+
+   return maxIndex + 1; // next LgGref for that day
+}
+
 // ---------- SETTINGS HELPERS ----------
 
 async function getOrCreateQueenSettings(ownerId, client = pool) {
-   const { rows } = await client.query(
-      `SELECT * FROM queen_settings WHERE owner_id = $1`,
-      [ownerId]
-   );
+   const { rows } = await client.query(`SELECT * FROM queen_settings WHERE owner_id = $1`, [
+      ownerId,
+   ]);
 
    if (rows.length > 0) return rows[0];
 
@@ -73,8 +99,7 @@ async function getNextGraftIndexForSeason(ownerId, season, client = pool) {
 function computeGraftDerivedDates(graftDate, settings) {
    const base = toDateOnly(graftDate);
 
-   const addDays = (d, n) =>
-      new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+   const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 
    const g10 = addDays(base, settings.g10_offset_days);
    const emergence = addDays(base, settings.emergence_offset_days);
@@ -181,15 +206,10 @@ async function generateCellsForLine({
 function defaultQrPayloadBuilder({ cellIndex, fullLotNumber, lotCode, line }) {
    const parents = `${line.female_line || ""} x ${line.male_line || ""}`.trim();
 
-   const gp1 = `${line.grandmother_female || ""} x ${
-      line.grandfather_female || ""
-   }`.trim();
-   const gp2 = `${line.grandmother_male || ""} x ${
-      line.grandfather_male || ""
-   }`.trim();
+   const gp1 = `${line.grandmother_female || ""} x ${line.grandfather_female || ""}`.trim();
+   const gp2 = `${line.grandmother_male || ""} x ${line.grandfather_male || ""}`.trim();
 
-   const grandparents =
-      gp1 || gp2 ? `[${gp1}] x [${gp2}]` : null;
+   const grandparents = gp1 || gp2 ? `[${gp1}] x [${gp2}]` : null;
 
    return {
       type: "queen_cell",
@@ -215,4 +235,5 @@ module.exports = {
    buildLotCode,
    generateCellsForLine,
    defaultQrPayloadBuilder,
+   getNextLineIndexForDay, // 👈 add this
 };

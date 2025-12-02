@@ -14,6 +14,7 @@ const {
    buildLotCode,
    generateCellsForLine,
    defaultQrPayloadBuilder,
+   getNextLineIndexForDay, // 👈 import helper
 } = require("../utils/queenUtils");
 
 // All routes require auth
@@ -302,34 +303,38 @@ router.post("/grafts", async (req, res) => {
       const createdLines = [];
       let lineIndexInSession = 0;
 
+      // 👇 NEW: find the next LgGref for that day
+      let nextLgGref = await getNextLineIndexForDay(ownerId, season, dayOfYear, client);
+
       for (const line of lines) {
-         lineIndexInSession += 1;
+         lineIndexInSession += 1; // purely internal, per session
+         const lgGref = nextLgGref++; // 👈 this is the LgGref used in LotGref (per *day*)
 
          const cellsPerStrip = settings.cells_per_strip;
          const cellsGrafted = (line.num_strips || 0) * cellsPerStrip;
 
-         const lotCode = buildLotCode(season, dayOfYear, lineIndexInSession);
+         const lotCode = buildLotCode(season, dayOfYear, lgGref); // 👈 now correct
 
          const lineInsert = await client.query(
             `
-            INSERT INTO queen_graft_lines (
-               session_id,
-               line_index_in_session,
-               strain_id,
-               breeder_id,
-               num_strips,
-               cells_grafted,
-               cells_accepted,
-               lot_code,
-               date_g10,
-               date_emergence,
-               date_laying_expected
-            )
-            VALUES (
-               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
-            )
-            RETURNING *
-            `,
+      INSERT INTO queen_graft_lines (
+         session_id,
+         line_index_in_session,
+         strain_id,
+         breeder_id,
+         num_strips,
+         cells_grafted,
+         cells_accepted,
+         lot_code,
+         date_g10,
+         date_emergence,
+         date_laying_expected
+      )
+      VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+      )
+      RETURNING *
+      `,
             [
                session.id,
                lineIndexInSession,
