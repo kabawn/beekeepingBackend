@@ -443,6 +443,42 @@ router.get("/grafts/:id", async (req, res) => {
    }
 });
 
+// ---------------- UPDATE ONE GRAFT LINE (NbBar / NbCell) ----------------
+
+// PUT /queen/grafts/lines/:lineId
+router.put("/grafts/lines/:lineId", async (req, res) => {
+   const ownerId = req.user.id;
+   const lineId = req.params.lineId;
+   const { num_strips, cells_accepted } = req.body;
+
+   try {
+      const { rows } = await pool.query(
+         `
+      UPDATE queen_graft_lines AS gl
+      SET
+        num_strips = COALESCE($3, gl.num_strips),
+        cells_accepted = COALESCE($4, gl.cells_accepted),
+        updated_at = now()
+      FROM queen_graft_sessions AS gs
+      WHERE gl.id = $1
+        AND gl.session_id = gs.id
+        AND gs.owner_id = $2
+      RETURNING gl.*;
+      `,
+         [lineId, ownerId, num_strips, cells_accepted]
+      );
+
+      if (!rows.length) {
+         return res.status(404).json({ error: "Graft line not found" });
+      }
+
+      return res.json({ line: rows[0] });
+   } catch (err) {
+      console.error("Error updating graft line:", err);
+      return res.status(500).json({ error: "Error updating graft line" });
+   }
+});
+
 // ---------------- CELLS GENERATION ----------------
 
 // POST /queen/grafts/lines/:lineId/cells/generate
@@ -474,7 +510,11 @@ router.post("/grafts/lines/:lineId/cells/generate", async (req, res) => {
       }
 
       const line = lineRows[0];
-      const count = cells_count && cells_count > 0 ? cells_count : line.cells_grafted;
+
+      // Prefer NbCell if it exists, otherwise fall back to Nb greffées
+      const defaultCount = line.cells_accepted || line.cells_grafted;
+
+      const count = cells_count && cells_count > 0 ? cells_count : defaultCount;
 
       const createdCells = await generateCellsForLine({
          lineId: line.id,
