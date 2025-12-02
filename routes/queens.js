@@ -102,6 +102,115 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
+// 👑 Create a queen from a grafted cell QR
+// body: { hive_id, qr_payload, forceReplace? }
+router.post("/from-cell", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { hive_id, qr_payload, forceReplace = false } = req.body;
+
+   if (!hive_id || !qr_payload) {
+      return res.status(400).json({ error: "hive_id and qr_payload are required" });
+   }
+
+   try {
+      // 1️⃣ Parse QR payload
+      let data;
+      try {
+         data = typeof qr_payload === "string" ? JSON.parse(qr_payload) : qr_payload;
+      } catch (e) {
+         console.error("Invalid QR payload:", e);
+         return res.status(400).json({ error: "Invalid QR payload JSON" });
+      }
+
+      const sourceType = data.type || "queen_cell"; // e.g. 'queen_cell'
+      const cellLot = data.cell_lot || data.full_lot_number || data.full_lot || null; // be tolerant
+      const strainName = data.strain || data.strain_name || null;
+      const graftingDate = data.graft_date || null;
+
+      // 2️⃣ Check if this hive already has a queen for this user (same logic as your old code)
+      const { data: existingQueen, error: checkError } = await supabase
+         .from("queens")
+         .select("queen_id")
+         .eq("hive_id", hive_id)
+         .eq("owner_user_id", userId)
+         .limit(1)
+         .maybeSingle();
+
+      if (checkError) {
+         console.error("Error checking existing queen:", checkError);
+         return res.status(500).json({ error: "Failed to check hive queen status" });
+      }
+
+      if (existingQueen) {
+         if (!forceReplace) {
+            return res
+               .status(400)
+               .json({ error: "This hive already has a queen linked. Use forceReplace." });
+         } else {
+            const { error: unlinkError } = await supabase
+               .from("queens")
+               .update({ hive_id: null })
+               .eq("queen_id", existingQueen.queen_id)
+               .eq("owner_user_id", userId);
+
+            if (unlinkError) {
+               console.error("Error unlinking old queen:", unlinkError);
+               return res.status(500).json({ error: "Failed to replace existing queen." });
+            }
+         }
+      }
+
+      // 3️⃣ Generate queen_code like before (Q-001, Q-002...) per user
+      const { data: allQueens, error: countError } = await supabase
+         .from("queens")
+         .select("queen_id")
+         .eq("owner_user_id", userId);
+
+      if (countError) {
+         console.error("Error counting queens:", countError);
+         return res.status(500).json({ error: "Failed to generate queen code" });
+      }
+
+      const count = allQueens?.length || 0;
+      const queenCode = `Q-${String(count + 1).padStart(3, "0")}`;
+      const publicKey = uuidv4();
+
+      // 4️⃣ Create queen row linked to hive + graft cell info (safe link via source_cell_lot)
+      const { data: created, error: insertError } = await supabase
+         .from("queens")
+         .insert([
+            {
+               queen_code: queenCode,
+               public_key: publicKey,
+               grafting_date: graftingDate,
+               strain_name: strainName,
+               opalite_color: null, // can be filled later if you want
+               expected_traits: null,
+               hive_id,
+               owner_user_id: userId,
+               source_type: sourceType, // 👈 linked to graft system
+               source_cell_lot: cellLot, // 👈 this is the safe link
+               source_cell_id: null, // we leave it null for now
+            },
+         ])
+         .select()
+         .single();
+
+      if (insertError) {
+         console.error("Insert error:", insertError);
+         return res.status(400).json({ error: insertError.message });
+      }
+
+      return res.status(201).json({
+         message: "Queen created from cell successfully",
+         queen: created,
+      });
+   } catch (err) {
+      console.error("Unexpected error in POST /queens/from-cell:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 // 🖼️ تحميل صورة QR لملكة
 // هذا المسار ممكن يظل عام لأنه فقط لطباعة اللاصق
 router.get("/qr-download/:public_key", async (req, res) => {
