@@ -82,6 +82,33 @@ router.post("/login", async (req, res) => {
    }
 });
 
+// ✅ Forgot password – send reset email
+router.post("/forgot-password", async (req, res) => {
+   const { email } = req.body;
+
+   if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+   }
+
+   try {
+      const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+         redirectTo: "https://example.com/password-reset", // MUST match Supabase URL config
+      });
+
+      if (error) {
+         console.error("🔴 Forgot-password Supabase error:", error);
+         return res.status(400).json({ error: error.message });
+      }
+
+      return res.status(200).json({
+         message: "✅ If this email exists, a reset link has been sent.",
+      });
+   } catch (err) {
+      console.error("Forgot-password server error:", err);
+      return res.status(500).json({ error: "Server error while sending reset email" });
+   }
+});
+
 // ✅ تحديث الـ access_token باستخدام refresh_token
 // ✅ تحديث الـ access_token باستخدام refresh_token
 router.post("/refresh", async (req, res) => {
