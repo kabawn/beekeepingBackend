@@ -143,17 +143,22 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
          return res.status(400).json({ error: "Invalid QR payload JSON" });
       }
 
+      console.log("👑 /queens/from-cell QR payload:", data);
+
       const sourceType = data.type || "queen_cell"; // e.g. 'queen_cell'
       const cellLot = data.cell_lot || data.full_lot_number || data.full_lot || null; // be tolerant
       const strainName = data.strain || data.strain_name || null;
       const graftingDate = data.graft_date || null;
 
+      // 🧬 NEW: parents / grandparents from QR
+      const parents = data.parents || null;
+      const grandparents = data.grandparents || null;
+
       // 🔹 Derive season and opalite color
       const season = data.season || (graftingDate ? new Date(graftingDate).getFullYear() : null);
-
       const opaliteColor = getOpaliteColorFromSeason(season);
 
-      // 2️⃣ Check if this hive already has a queen for this user (same logic as your old code)
+      // 2️⃣ Check if this hive already has a queen for this user
       const { data: existingQueen, error: checkError } = await supabase
          .from("queens")
          .select("queen_id")
@@ -201,7 +206,7 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
       const queenCode = `Q-${String(count + 1).padStart(3, "0")}`;
       const publicKey = uuidv4();
 
-      // 4️⃣ Create queen row linked to hive + graft cell info (safe link via source_cell_lot)
+      // 4️⃣ Create queen row linked to hive + graft cell info
       const { data: created, error: insertError } = await supabase
          .from("queens")
          .insert([
@@ -210,13 +215,17 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
                public_key: publicKey,
                grafting_date: graftingDate,
                strain_name: strainName,
-               opalite_color: opaliteColor, // 🔹 now auto-filled from season
+               opalite_color: opaliteColor, // 🔹 auto-filled from season
                expected_traits: null,
                hive_id,
                owner_user_id: userId,
                source_type: sourceType, // 👈 linked to graft system
-               source_cell_lot: cellLot, // 👈 this is the safe link
-               source_cell_id: null, // we leave it null for now
+               source_cell_lot: cellLot, // 👈 safe link to graft line
+               source_cell_id: null,
+
+               // 🧬 NEW: store pedigree text directly on queen
+               parents,
+               grandparents,
             },
          ])
          .select()
@@ -226,6 +235,8 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
          console.error("Insert error:", insertError);
          return res.status(400).json({ error: insertError.message });
       }
+
+      console.log("✅ Queen created from cell:", created);
 
       return res.status(201).json({
          message: "Queen created from cell successfully",
