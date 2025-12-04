@@ -83,6 +83,7 @@ router.post("/login", async (req, res) => {
 });
 
 // ✅ Forgot password – send reset email
+// ✅ Forgot password – send reset email
 router.post("/forgot-password", async (req, res) => {
    const { email } = req.body;
 
@@ -92,7 +93,8 @@ router.post("/forgot-password", async (req, res) => {
 
    try {
       const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-         redirectTo: "https://example.com/password-reset", // MUST match Supabase URL config
+         // 👇 Deep link to your app – we'll handle this in the app
+         redirectTo: "exp+beestats://reset-password",
       });
 
       if (error) {
@@ -106,6 +108,48 @@ router.post("/forgot-password", async (req, res) => {
    } catch (err) {
       console.error("Forgot-password server error:", err);
       return res.status(500).json({ error: "Server error while sending reset email" });
+   }
+});
+
+// ✅ Reset password using access_token from Supabase recovery link
+// ✅ Reset password using access_token from Supabase recovery link
+router.post("/reset-password", async (req, res) => {
+   const { access_token, new_password } = req.body;
+
+   if (!access_token || !new_password) {
+      return res.status(400).json({ error: "access_token and new_password are required" });
+   }
+
+   try {
+      // 1️⃣ Get the user from the recovery access token
+      const { data: userData, error: getUserError } = await supabase.auth.getUser(access_token);
+
+      if (getUserError || !userData?.user) {
+         console.error("🔴 getUser error:", getUserError);
+         return res.status(400).json({ error: "Invalid or expired recovery token" });
+      }
+
+      const userId = userData.user.id;
+
+      // 2️⃣ Update the password via admin API
+      const { data: updatedUser, error: updateError } = await supabase.auth.admin.updateUserById(
+         userId,
+         {
+            password: new_password,
+         }
+      );
+
+      if (updateError) {
+         console.error("🔴 updateUserById error:", updateError);
+         return res.status(400).json({ error: updateError.message });
+      }
+
+      return res.status(200).json({
+         message: "✅ Password updated successfully",
+      });
+   } catch (err) {
+      console.error("🔴 reset-password server error:", err);
+      return res.status(500).json({ error: "Server error while resetting password" });
    }
 });
 
