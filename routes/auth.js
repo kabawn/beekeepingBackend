@@ -94,7 +94,7 @@ router.post("/forgot-password", async (req, res) => {
    try {
       const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
          // 👇 Deep link to your app – we'll handle this in the app
-         redirectTo: "exp+beestats://reset-password",
+         redirectTo: "bstats://reset-password",
       });
 
       if (error) {
