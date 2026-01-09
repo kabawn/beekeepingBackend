@@ -5,6 +5,8 @@ const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
 // ✅ تسجيل فحص جديد لخلية
+// ✅ تسجيل فحص جديد لخلية
+// ✅ تسجيل فحص جديد لخلية (UPDATED)
 router.post("/", authenticateUser, async (req, res) => {
    const {
       hive_id,
@@ -15,16 +17,73 @@ router.post("/", authenticateUser, async (req, res) => {
       brood_quality,
       food_storage,
       sickness_signs,
-      frame_count,
+      frame_count, // total frames at inspection time ✅
+
+      // ✅ NEW fields
+      bee_frames,
+      brood_frames,
+      larvae_present,
+      varroa_level, // not_checked | low | medium | high
+
       revisit_needed,
       revisit_date,
       notes,
    } = req.body;
 
-   if (!hive_id) {
-      return res.status(400).json({ error: "hive_id is required" });
+   if (!hive_id) return res.status(400).json({ error: "hive_id is required" });
+
+   // ---------- helpers ----------
+   const toIntOrNull = (v) => (v === undefined || v === null || v === "" ? null : Number(v));
+   const isInt = (v) => Number.isInteger(v);
+
+   const fc = toIntOrNull(frame_count);
+   const bf = toIntOrNull(bee_frames);
+   const brf = toIntOrNull(brood_frames);
+
+   // ---------- validation ----------
+   if (fc !== null && (!Number.isFinite(fc) || !isInt(fc) || fc < 0 || fc > 30)) {
+      return res.status(400).json({ error: "frame_count must be an integer between 0 and 30" });
    }
 
+   if (bf !== null && (!Number.isFinite(bf) || !isInt(bf) || bf < 0)) {
+      return res.status(400).json({ error: "bee_frames must be a non-negative integer" });
+   }
+
+   if (brf !== null && (!Number.isFinite(brf) || !isInt(brf) || brf < 0)) {
+      return res.status(400).json({ error: "brood_frames must be a non-negative integer" });
+   }
+
+   if (fc !== null && bf !== null && bf > fc) {
+      return res.status(400).json({ error: "bee_frames cannot be greater than frame_count" });
+   }
+
+   if (fc !== null && brf !== null && brf > fc) {
+      return res.status(400).json({ error: "brood_frames cannot be greater than frame_count" });
+   }
+
+   if (
+      larvae_present !== undefined &&
+      larvae_present !== null &&
+      typeof larvae_present !== "boolean"
+   ) {
+      return res.status(400).json({ error: "larvae_present must be boolean" });
+   }
+
+   if (varroa_level !== undefined && varroa_level !== null) {
+      const allowed = new Set(["not_checked", "low", "medium", "high"]);
+      if (!allowed.has(varroa_level)) {
+         return res.status(400).json({
+            error: "varroa_level must be one of: not_checked, low, medium, high",
+         });
+      }
+   }
+
+   // sickness_signs: خلّيه boolean (وإذا جايك من فرونت قديم كنص، نحوله)
+   let sicknessBool = sickness_signs;
+   if (sickness_signs === "false") sicknessBool = false;
+   if (sickness_signs === "true") sicknessBool = true;
+
+   // ---------- insert ----------
    try {
       const { data, error } = await supabase
          .from("hive_inspections")
@@ -37,8 +96,15 @@ router.post("/", authenticateUser, async (req, res) => {
                queen_cell_present,
                brood_quality,
                food_storage,
-               sickness_signs,
-               frame_count,
+               sickness_signs: sicknessBool,
+               frame_count: fc,
+
+               // ✅ NEW fields
+               bee_frames: bf,
+               brood_frames: brf,
+               larvae_present: larvae_present ?? null,
+               varroa_level: varroa_level ?? null,
+
                revisit_needed,
                revisit_date,
                notes,
@@ -47,11 +113,12 @@ router.post("/", authenticateUser, async (req, res) => {
          ])
          .select();
 
-      if (error) {
-         return res.status(400).json({ error: error.message });
-      }
+      if (error) return res.status(400).json({ error: error.message });
 
-      res.status(201).json({ message: "✅ Inspection recorded successfully", inspection: data[0] });
+      res.status(201).json({
+         message: "✅ Inspection recorded successfully",
+         inspection: data[0],
+      });
    } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Unexpected server error" });
