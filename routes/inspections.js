@@ -15,10 +15,153 @@ const STATUS = {
    RED: "red",
 };
 
-// Helper: safe number (int) or null
+// -------- Helpers --------
 const toIntOrNull = (v) => (v === undefined || v === null || v === "" ? null : Number(v));
 const isInt = (v) => Number.isInteger(v);
+const uniq = (arr) => [...new Set(arr)];
+const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
+function safeNum(v) {
+   const n = Number(v);
+   return Number.isFinite(n) ? n : null;
+}
+
+function daysBetween(a, b) {
+   // a, b are "YYYY-MM-DD"
+   if (!a || !b) return null;
+   const da = new Date(a);
+   const db = new Date(b);
+   const diff = (da - db) / (1000 * 60 * 60 * 24);
+   return Number.isFinite(diff) ? diff : null;
+}
+
+function normalizeFood(food_storage) {
+   if (!food_storage) return null;
+   const v = String(food_storage).toLowerCase();
+   if (["weak", "poor", "low", "faible", "pauvre"].includes(v)) return "low";
+   if (["good", "ok", "medium", "correct", "moyen"].includes(v)) return "ok";
+   if (["excellent", "high", "strong", "fort"].includes(v)) return "high";
+   return "ok";
+}
+
+function normalizeBroodQuality(brood_quality) {
+   if (!brood_quality) return null;
+   const v = String(brood_quality).toLowerCase();
+   if (["poor", "weak", "bad", "faible", "mauvais"].includes(v)) return "low";
+   if (["good", "ok", "medium", "correct", "moyen"].includes(v)) return "ok";
+   if (["excellent", "great", "high", "fort"].includes(v)) return "high";
+   return "ok";
+}
+
+function normalizeVarroa(varroa_level) {
+   if (!varroa_level) return null;
+   const v = String(varroa_level).toLowerCase();
+   const allowed = new Set(["not_checked", "low", "medium", "high"]);
+   return allowed.has(v) ? v : null;
+}
+
+// ----------------------------
+// Scoring / Confidence Model
+// ----------------------------
+const REASON_PENALTY = {
+   // Critical
+   SICKNESS_SIGNS_REPORTED: 60,
+   QUEEN_SUSPECT_NO_EGGS_NO_LARVAE: 55,
+   SWARM_RISK_HIGH: 50,
+   VARROA_HIGH: 45,
+
+   // Medium
+   QUEEN_SUSPECT_LARVAE_NO_EGGS: 25,
+   QUEEN_CELLS_PRESENT_MONITOR: 20,
+   VARROA_MEDIUM: 20,
+   FOOD_LOW: 20,
+   COLONY_WEAK: 15,
+   BROOD_QUALITY_LOW: 15,
+   BROOD_SMALL_BUT_EGGS_PRESENT: 10,
+
+   // Positive/neutral (no penalty)
+   VARROA_LOW: 0,
+   FOOD_OK: 0,
+   BROOD_QUALITY_OK: 0,
+   INSPECTION_STABLE: 0,
+
+   // Missing data (tiny penalty)
+   DATA_MISSING_FRAME_COUNT: 5,
+   DATA_MISSING_BEE_FRAMES: 5,
+   DATA_MISSING_BROOD_FRAMES: 5,
+   DATA_MISSING_LARVAE: 5,
+   DATA_MISSING_VARROA: 5,
+};
+
+// Missing-data reasons used to compute confidence
+const MISSING_DATA_REASONS = new Set([
+   "DATA_MISSING_FRAME_COUNT",
+   "DATA_MISSING_BEE_FRAMES",
+   "DATA_MISSING_BROOD_FRAMES",
+   "DATA_MISSING_LARVAE",
+   "DATA_MISSING_VARROA",
+]);
+
+function computeScore(status, reason_codes) {
+   let score = 100;
+   for (const r of reason_codes || []) {
+      score -= REASON_PENALTY[r] ?? 0;
+   }
+   score = clamp(score, 0, 100);
+
+   // enforce bands by status (UI-friendly)
+   if (status === STATUS.RED) score = Math.min(score, 49);
+   if (status === STATUS.YELLOW) score = Math.min(score, 79);
+   if (status === STATUS.GREEN) score = Math.max(score, 80);
+
+   return score;
+}
+
+function computeConfidence(reason_codes) {
+   // Start high, subtract a bit per missing critical metric
+   let c = 1.0;
+   const missing = (reason_codes || []).filter((r) => MISSING_DATA_REASONS.has(r)).length;
+   c -= missing * 0.12;
+   return clamp(Number(c.toFixed(2)), 0.35, 1.0);
+}
+
+// ----------------------------
+// Smart chips generator (codes only)
+// ----------------------------
+function buildSmartChips(analysis) {
+   // Return small UI-ready chips as codes (no language here)
+   const chips = [];
+
+   if (analysis.status === STATUS.GREEN) chips.push("CHIP_STABLE");
+   if (analysis.status === STATUS.YELLOW) chips.push("CHIP_NEEDS_ATTENTION");
+   if (analysis.status === STATUS.RED) chips.push("CHIP_URGENT");
+
+   // pick up to 3 strong reasons to display
+   const priority = [
+      "SICKNESS_SIGNS_REPORTED",
+      "QUEEN_SUSPECT_NO_EGGS_NO_LARVAE",
+      "SWARM_RISK_HIGH",
+      "VARROA_HIGH",
+      "FOOD_LOW",
+      "QUEEN_SUSPECT_LARVAE_NO_EGGS",
+      "VARROA_MEDIUM",
+      "COLONY_WEAK",
+      "BROOD_QUALITY_LOW",
+      "BROOD_SMALL_BUT_EGGS_PRESENT",
+      "VARROA_NOT_CHECKED",
+   ];
+
+   for (const p of priority) {
+      if (analysis.reason_codes.includes(p)) chips.push(`CHIP_${p}`);
+      if (chips.length >= 5) break;
+   }
+
+   return uniq(chips);
+}
+
+// ----------------------------
+// Main analysis function
+// ----------------------------
 function analyzeInspection(insp) {
    const {
       queen_seen,
@@ -34,37 +177,29 @@ function analyzeInspection(insp) {
       varroa_level,
    } = insp;
 
-   const fc = Number.isFinite(Number(frame_count)) ? Number(frame_count) : null;
-   const bf = Number.isFinite(Number(bee_frames)) ? Number(bee_frames) : null;
-   const brf = Number.isFinite(Number(brood_frames)) ? Number(brood_frames) : null;
+   const fc = safeNum(frame_count);
+   const bf = safeNum(bee_frames);
+   const brf = safeNum(brood_frames);
 
-   const beeRatio = fc && bf != null ? bf / fc : null; // colony strength ratio
-   const broodRatio = fc && brf != null ? brf / fc : null; // brood area ratio
+   const beeRatio = fc && bf != null ? bf / fc : null;
+   const broodRatio = fc && brf != null ? brf / fc : null;
 
-   // Outputs (codes only)
+   const food = normalizeFood(food_storage);
+   const broodQ = normalizeBroodQuality(brood_quality);
+   const varroa = normalizeVarroa(varroa_level);
+
    const reason_codes = [];
    const action_codes = [];
 
    let status = STATUS.GREEN;
    let suggested_revisit_days = 7;
 
-   // ---------- Priority 0: invalid / missing critical data ----------
-   // (We keep it gentle: if missing, do not mark red, just reduce confidence)
-   if (fc === null) {
-      reason_codes.push("DATA_MISSING_FRAME_COUNT");
-   }
-   if (bf === null) {
-      reason_codes.push("DATA_MISSING_BEE_FRAMES");
-   }
-   if (brf === null) {
-      reason_codes.push("DATA_MISSING_BROOD_FRAMES");
-   }
-   if (larvae_present === null || larvae_present === undefined) {
-      reason_codes.push("DATA_MISSING_LARVAE");
-   }
-   if (varroa_level === null || varroa_level === undefined) {
-      reason_codes.push("DATA_MISSING_VARROA");
-   }
+   // ---------- Missing data (affects confidence, not always status) ----------
+   if (fc === null) reason_codes.push("DATA_MISSING_FRAME_COUNT");
+   if (bf === null) reason_codes.push("DATA_MISSING_BEE_FRAMES");
+   if (brf === null) reason_codes.push("DATA_MISSING_BROOD_FRAMES");
+   if (larvae_present === null || larvae_present === undefined) reason_codes.push("DATA_MISSING_LARVAE");
+   if (varroa === null || varroa === undefined) reason_codes.push("DATA_MISSING_VARROA");
 
    // ---------- Priority 1: sickness ----------
    if (sickness_signs === true) {
@@ -77,11 +212,11 @@ function analyzeInspection(insp) {
    }
 
    // ---------- Priority 2: queen / brood continuity ----------
-   // Eggs are the strongest indicator of a laying queen in the last ~3 days
    if (status !== STATUS.RED) {
       const noEggs = eggs_seen === false;
       const noLarvae = larvae_present === false;
 
+      // Eggs + larvae missing is strong warning (queen issue or just too early)
       if (noEggs && noLarvae) {
          status = STATUS.RED;
          reason_codes.push("QUEEN_SUSPECT_NO_EGGS_NO_LARVAE");
@@ -99,7 +234,6 @@ function analyzeInspection(insp) {
    }
 
    // ---------- Priority 3: swarm / supersedure risk ----------
-   // Queen cells can indicate swarm prep OR supersedure. We use strength + brood as proxy.
    if (status !== STATUS.RED && queen_cell_present === true) {
       const strongByFrames = bf != null ? bf >= 7 : false;
       const strongByRatio = beeRatio != null ? beeRatio >= 0.7 : false;
@@ -117,48 +251,45 @@ function analyzeInspection(insp) {
       } else {
          status = STATUS.YELLOW;
          reason_codes.push("QUEEN_CELLS_PRESENT_MONITOR");
-         action_codes.push("ACTION_RECHECK_TO_IDENTIFY_SWARM_OR_SUPERSEDURE");
-         action_codes.push("ACTION_ENSURE_SPACE_AND_FOOD");
+         // Use existing action codes (avoid unknown keys)
+         action_codes.push("ACTION_RECHECK_QUEEN_CELLS_SOON");
+         action_codes.push("ACTION_ADD_SPACE_OR_SPLIT");
+         action_codes.push("ACTION_FEED_APPROPRIATELY_SEASON");
          suggested_revisit_days = Math.min(suggested_revisit_days, 5);
       }
    }
 
    // ---------- Priority 4: varroa ----------
-   if (varroa_level === "high") {
+   if (varroa === "high") {
       status = STATUS.RED;
       reason_codes.push("VARROA_HIGH");
       action_codes.push("ACTION_PLAN_VARROA_TREATMENT");
       action_codes.push("ACTION_RECHECK_VARROA_AFTER_TREATMENT");
       suggested_revisit_days = Math.min(suggested_revisit_days, 3);
-   } else if (status === STATUS.GREEN && varroa_level === "medium") {
+   } else if (status === STATUS.GREEN && varroa === "medium") {
       status = STATUS.YELLOW;
       reason_codes.push("VARROA_MEDIUM");
       action_codes.push("ACTION_MONITOR_VARROA_AND_PLAN_WINDOW");
       suggested_revisit_days = Math.min(suggested_revisit_days, 7);
-   } else if (varroa_level === "low") {
+   } else if (varroa === "low") {
       reason_codes.push("VARROA_LOW");
-   } else if (varroa_level === "not_checked") {
+   } else if (varroa === "not_checked") {
       reason_codes.push("VARROA_NOT_CHECKED");
       action_codes.push("ACTION_CHECK_VARROA_NEXT_VISIT");
    }
 
    // ---------- Priority 5: food ----------
-   const lowFood = ["Weak", "Poor", "Low"].includes(food_storage);
-   if (lowFood) {
+   if (food === "low") {
       if (status === STATUS.GREEN) status = STATUS.YELLOW;
       reason_codes.push("FOOD_LOW");
       action_codes.push("ACTION_FEED_APPROPRIATELY_SEASON");
       action_codes.push("ACTION_AVOID_EXPANSION_UNTIL_FOOD_OK");
       suggested_revisit_days = Math.min(suggested_revisit_days, 5);
-   } else if (food_storage) {
-      // useful as positive context
-      if (["Good", "Excellent", "High"].includes(food_storage)) {
-         reason_codes.push("FOOD_OK");
-      }
+   } else if (food === "high" || food === "ok") {
+      reason_codes.push("FOOD_OK");
    }
 
    // ---------- Secondary: strength / brood pattern hints ----------
-   // Only if still green (no serious flags)
    if (status === STATUS.GREEN) {
       if (beeRatio != null && beeRatio < 0.4) {
          status = STATUS.YELLOW;
@@ -175,35 +306,35 @@ function analyzeInspection(insp) {
       }
    }
 
-   // Brood quality can add context (not decisive alone)
-   if (brood_quality) {
-      if (["Poor", "Weak"].includes(brood_quality)) {
-         if (status === STATUS.GREEN) status = STATUS.YELLOW;
-         reason_codes.push("BROOD_QUALITY_LOW");
-         action_codes.push("ACTION_CHECK_QUEEN_AND_VARROA");
-         suggested_revisit_days = Math.min(suggested_revisit_days, 6);
-      } else if (["Good", "Excellent"].includes(brood_quality)) {
-         reason_codes.push("BROOD_QUALITY_OK");
-      }
+   // Brood quality context
+   if (broodQ === "low") {
+      if (status === STATUS.GREEN) status = STATUS.YELLOW;
+      reason_codes.push("BROOD_QUALITY_LOW");
+      action_codes.push("ACTION_CHECK_QUEEN_AND_VARROA");
+      suggested_revisit_days = Math.min(suggested_revisit_days, 6);
+   } else if (broodQ === "high" || broodQ === "ok") {
+      reason_codes.push("BROOD_QUALITY_OK");
    }
 
-   // Ensure we return something sensible
-   if (reason_codes.length === 0) {
-      reason_codes.push("INSPECTION_STABLE");
-   }
+   if (reason_codes.length === 0) reason_codes.push("INSPECTION_STABLE");
 
    if (action_codes.length === 0) {
       action_codes.push("ACTION_CONTINUE_WEEKLY_INSPECTIONS");
       action_codes.push("ACTION_KEEP_NOTES_CONSISTENT");
    }
 
-   // Remove duplicate codes while keeping order
-   const uniq = (arr) => [...new Set(arr)];
+   const reasonU = uniq(reason_codes);
+   const actionU = uniq(action_codes);
 
-   return {
+   const score = computeScore(status, reasonU);
+   const confidence = computeConfidence(reasonU);
+
+   const analysis = {
       status, // green | yellow | red
-      reason_codes: uniq(reason_codes),
-      action_codes: uniq(action_codes),
+      score, // 0..100
+      confidence, // 0.35..1
+      reason_codes: reasonU,
+      action_codes: actionU,
       metrics: {
          bee_ratio: beeRatio,
          brood_ratio: broodRatio,
@@ -212,6 +343,98 @@ function analyzeInspection(insp) {
          brood_frames: brf,
       },
       suggested_revisit_days,
+   };
+
+   return {
+      ...analysis,
+      chips: buildSmartChips(analysis), // UI helper
+      smart_summary: {
+         // codes only - UI translates
+         top_reasons: reasonU.slice(0, 3),
+         top_actions: actionU.slice(0, 3),
+      },
+   };
+}
+
+// ----------------------------
+// Hive summary (across inspections)
+// ----------------------------
+function buildHiveSummary(inspectionsSortedDesc) {
+   // inspectionsSortedDesc is latest first
+   const list = inspectionsSortedDesc || [];
+   if (list.length === 0) {
+      return {
+         has_data: false,
+         latest_date: null,
+         latest_status: null,
+         latest_score: null,
+         trend: null,
+         counters: { green: 0, yellow: 0, red: 0 },
+         next_revisit_date: null,
+         smart: {
+            headline_code: "HIVE_NO_INSPECTIONS",
+            chips: ["CHIP_NO_DATA"],
+            top_reasons: [],
+            top_actions: [],
+         },
+      };
+   }
+
+   const latest = list[0];
+   const prev = list[1];
+
+   const counters = { green: 0, yellow: 0, red: 0 };
+   for (const x of list) {
+      const st = x.analysis?.status;
+      if (st === STATUS.GREEN) counters.green++;
+      else if (st === STATUS.YELLOW) counters.yellow++;
+      else if (st === STATUS.RED) counters.red++;
+   }
+
+   // Trend based on score difference
+   let trend = null;
+   if (latest?.analysis?.score != null && prev?.analysis?.score != null) {
+      const diff = latest.analysis.score - prev.analysis.score;
+      trend = diff > 5 ? "improving" : diff < -5 ? "declining" : "stable";
+   }
+
+   // Next revisit: pick nearest future revisit_date among revisit_needed = true
+   let nextRevisit = null;
+   const todayStr = new Date().toISOString().split("T")[0];
+   for (const x of list) {
+      if (x.revisit_needed && x.revisit_date) {
+         // keep only today or future
+         if (x.revisit_date >= todayStr) {
+            if (!nextRevisit || x.revisit_date < nextRevisit) nextRevisit = x.revisit_date;
+         }
+      }
+   }
+
+   // Headline code
+   let headline_code = "HIVE_STABLE";
+   if (latest.analysis?.status === STATUS.RED) headline_code = "HIVE_URGENT";
+   else if (latest.analysis?.status === STATUS.YELLOW) headline_code = "HIVE_NEEDS_ATTENTION";
+
+   // If declining trend, override headline
+   if (trend === "declining" && latest.analysis?.status !== STATUS.RED) {
+      headline_code = "HIVE_TREND_DECLINING";
+   }
+
+   return {
+      has_data: true,
+      latest_date: latest.inspection_date,
+      latest_status: latest.analysis?.status ?? null,
+      latest_score: latest.analysis?.score ?? null,
+      latest_confidence: latest.analysis?.confidence ?? null,
+      trend,
+      counters,
+      next_revisit_date: nextRevisit,
+      smart: {
+         headline_code,
+         chips: latest.analysis?.chips ?? [],
+         top_reasons: latest.analysis?.smart_summary?.top_reasons ?? [],
+         top_actions: latest.analysis?.smart_summary?.top_actions ?? [],
+      },
    };
 }
 
@@ -243,48 +466,39 @@ router.post("/", authenticateUser, async (req, res) => {
 
    if (!hive_id) return res.status(400).json({ error: "hive_id is required" });
 
-   // ---------- parse ints ----------
+   // parse ints
    const fc = toIntOrNull(frame_count);
    const bf = toIntOrNull(bee_frames);
    const brf = toIntOrNull(brood_frames);
 
-   // ---------- validation ----------
+   // validation
    if (fc !== null && (!Number.isFinite(fc) || !isInt(fc) || fc < 0 || fc > 30)) {
       return res.status(400).json({ error: "frame_count must be an integer between 0 and 30" });
    }
-
    if (bf !== null && (!Number.isFinite(bf) || !isInt(bf) || bf < 0)) {
       return res.status(400).json({ error: "bee_frames must be a non-negative integer" });
    }
-
    if (brf !== null && (!Number.isFinite(brf) || !isInt(brf) || brf < 0)) {
       return res.status(400).json({ error: "brood_frames must be a non-negative integer" });
    }
-
    if (fc !== null && bf !== null && bf > fc) {
       return res.status(400).json({ error: "bee_frames cannot be greater than frame_count" });
    }
-
    if (fc !== null && brf !== null && brf > fc) {
       return res.status(400).json({ error: "brood_frames cannot be greater than frame_count" });
    }
-
-   // 🔥 Important beekeeping logic: brood frames generally cannot exceed bee-covered frames
+   // beekeeping logic: brood frames cannot exceed bee-covered frames
    if (bf !== null && brf !== null && brf > bf) {
       return res.status(400).json({ error: "brood_frames cannot be greater than bee_frames" });
    }
 
-   if (
-      larvae_present !== undefined &&
-      larvae_present !== null &&
-      typeof larvae_present !== "boolean"
-   ) {
+   if (larvae_present !== undefined && larvae_present !== null && typeof larvae_present !== "boolean") {
       return res.status(400).json({ error: "larvae_present must be boolean" });
    }
 
    if (varroa_level !== undefined && varroa_level !== null) {
       const allowed = new Set(["not_checked", "low", "medium", "high"]);
-      if (!allowed.has(varroa_level)) {
+      if (!allowed.has(String(varroa_level))) {
          return res.status(400).json({
             error: "varroa_level must be one of: not_checked, low, medium, high",
          });
@@ -330,6 +544,8 @@ router.post("/", authenticateUser, async (req, res) => {
       if (error) return res.status(400).json({ error: error.message });
 
       const inspection = data[0];
+
+      // attach analysis (not stored, computed)
       const analysis = analyzeInspection(inspection);
 
       return res.status(201).json({
@@ -345,6 +561,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
 // ----------------------------
 // ✅ GET /inspections/hive/:hive_id
+// Returns: inspections[] (with analysis + ratios) + summary
 // ----------------------------
 router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
    const { hive_id } = req.params;
@@ -363,23 +580,83 @@ router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
 
       if (error) return res.status(400).json({ error: error.message });
 
-      const result = (inspections || []).map((insp) => ({
-         ...insp,
-         missing_frames:
-            insp.hives?.frame_capacity != null && insp.frame_count != null
-               ? insp.hives.frame_capacity - insp.frame_count
-               : null,
+      const computed = (inspections || []).map((insp) => {
+         const analysis = analyzeInspection(insp);
 
-         // Optional helpful ratios for UI (no translation needed)
-         bee_ratio:
-            insp.frame_count && insp.bee_frames != null ? insp.bee_frames / insp.frame_count : null,
-         brood_ratio:
-            insp.frame_count && insp.brood_frames != null
-               ? insp.brood_frames / insp.frame_count
-               : null,
+         const frameCapacity = insp.hives?.frame_capacity ?? null;
+         const missingFrames =
+            frameCapacity != null && insp.frame_count != null ? frameCapacity - insp.frame_count : null;
+
+         const bee_ratio =
+            insp.frame_count && insp.bee_frames != null ? insp.bee_frames / insp.frame_count : null;
+
+         const brood_ratio =
+            insp.frame_count && insp.brood_frames != null ? insp.brood_frames / insp.frame_count : null;
+
+         return {
+            ...insp,
+            missing_frames: missingFrames,
+            bee_ratio,
+            brood_ratio,
+            analysis,
+         };
+      });
+
+      // Trend per item (latest vs previous)
+      for (let i = 0; i < computed.length; i++) {
+         const current = computed[i];
+         const prev = computed[i + 1];
+         if (!prev?.analysis?.score) {
+            current.smart_trend = null;
+            current.smart_score_delta = null;
+            continue;
+         }
+         const diff = current.analysis.score - prev.analysis.score;
+         current.smart_score_delta = Number(diff.toFixed(0));
+         current.smart_trend = diff > 5 ? "improving" : diff < -5 ? "declining" : "stable";
+      }
+
+      const summary = buildHiveSummary(computed);
+
+      return res.status(200).json({
+         inspections: computed,
+         summary, // NEW (doesn't break existing clients)
+      });
+   } catch (err) {
+      console.error(err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+// ----------------------------
+// ✅ GET /inspections/hive/:hive_id/summary
+// Small endpoint if you want the summary alone
+// ----------------------------
+router.get("/hive/:hive_id/summary", authenticateUser, async (req, res) => {
+   const { hive_id } = req.params;
+
+   try {
+      const { data: inspections, error } = await supabase
+         .from("hive_inspections")
+         .select(
+            `
+          *,
+          hives(frame_capacity)
+        `
+         )
+         .eq("hive_id", hive_id)
+         .order("inspection_date", { ascending: false })
+         .limit(30);
+
+      if (error) return res.status(400).json({ error: error.message });
+
+      const computed = (inspections || []).map((insp) => ({
+         ...insp,
+         analysis: analyzeInspection(insp),
       }));
 
-      return res.status(200).json({ inspections: result });
+      const summary = buildHiveSummary(computed);
+      return res.status(200).json({ summary });
    } catch (err) {
       console.error(err);
       return res.status(500).json({ error: "Unexpected server error" });
