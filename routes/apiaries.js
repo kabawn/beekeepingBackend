@@ -87,13 +87,13 @@ router.post("/", authenticateUser, async (req, res) => {
          await Promise.all(
             prodList.map((p) =>
                pool.query(
-                  `INSERT INTO apiary_productions (apiary_id, production_type, is_active)
-                   SELECT $1, $2, TRUE
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM apiary_productions
-                     WHERE apiary_id = $1 AND production_type = $2
-                   )`,
-                  [apiaryId, p]
+                  `INSERT INTO apiary_productions (apiary_id, production_type, is_active, deactivated_at)
+       VALUES ($1, $2, TRUE, NULL)
+       ON CONFLICT (apiary_id, production_type)
+       DO UPDATE SET
+         is_active = TRUE,
+         deactivated_at = NULL`,
+                  [id, p]
                )
             )
          );
