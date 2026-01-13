@@ -212,6 +212,12 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
    }
 });
 
+/**
+ * ✅ Generate ONE PDF containing QR codes for ALL hives in one apiary
+ * QR CONTENT = hive.public_key (RAW) ✅
+ *
+ * GET /apiaries/:id/hives/qr-pdf?label_mm=50&gap_mm=6&cols=3&text=1
+ */
 router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
    const { id } = req.params; // apiary_id
    const userId = req.user.id;
@@ -219,7 +225,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
    // خيارات للطباعة (اختياري)
    const labelSizeMm = Number(req.query.label_mm || 50); // 50mm = 5cm
    const gapMm = Number(req.query.gap_mm || 6); // مسافة بين الملصقات
-   const cols = Number(req.query.cols || 3); // عدد الأعمدة
+   const cols = Math.max(1, Number(req.query.cols || 3)); // عدد الأعمدة
    const showText = (req.query.text ?? "1") !== "0"; // إظهار النص تحت QR
 
    try {
@@ -228,6 +234,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
          "SELECT apiary_name, company_id FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
          [id, userId]
       );
+
       if (ownership.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
@@ -239,8 +246,8 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
          "SELECT hive_id, hive_code, public_key FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
          [id]
       );
-      const hives = hivesResult.rows || [];
 
+      const hives = hivesResult.rows || [];
       if (hives.length === 0) {
          return res.status(404).json({ error: "No hives found for this apiary" });
       }
@@ -263,7 +270,6 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       doc.pipe(res);
 
       // مقاسات وتخطيط
-      const pageWidth = doc.page.width;
       const pageHeight = doc.page.height;
 
       const labelSize = mmToPt(labelSizeMm);
@@ -278,35 +284,48 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       const cellW = labelSize + gap;
       const cellH = labelSize + textBlock + gap;
 
-      // لو cols كبيرة/صغيرة، نحسب تلقائياً إن تحب (هنا ثابتة من query)
-      const maxRows = Math.floor((pageHeight - startY - doc.page.margins.bottom + gap) / cellH);
+      // عدد الصفوف في الصفحة
+      const maxRows = Math.max(
+         1,
+         Math.floor((pageHeight - startY - doc.page.margins.bottom + gap) / cellH)
+      );
 
       // عنوان صغير (اختياري)
-      doc.fontSize(12).text(`BeeStats — ${ownerLabel}`, { align: "left" });
-      doc.moveDown(0.5);
+      const drawHeader = () => {
+         doc.fontSize(12).fillColor("#000").text(`BeeStats — ${ownerLabel}`, { align: "left" });
+         doc.moveDown(0.5);
+      };
+
+      drawHeader();
 
       let index = 0;
 
       for (const hive of hives) {
          // صفحة جديدة لو امتلأت
          const pos = index; // يبدأ من 0
-         const col = pos % cols;
-         const row = Math.floor(pos / cols) % maxRows;
+         const perPage = cols * maxRows;
 
-         // إذا دخلنا على row=0 بعد maxRows*cols → صفحة جديدة
-         if (pos > 0 && pos % (cols * maxRows) === 0) {
+         if (pos > 0 && pos % perPage === 0) {
             doc.addPage();
-            doc.fontSize(12).text(`BeeStats — ${ownerLabel}`, { align: "left" });
-            doc.moveDown(0.5);
+            drawHeader();
          }
+
+         const localPos = pos % perPage;
+         const col = localPos % cols;
+         const row = Math.floor(localPos / cols);
 
          const baseX = startX + col * cellW;
          const baseY = startY + mmToPt(8) + row * cellH; // +8mm تحت العنوان
 
-         const qrUrl = `https://yourapp.com/hive/${hive.public_key}`;
+         // ✅ QR DATA = public_key فقط
+         const qrData = String(hive.public_key || "").trim();
+         if (!qrData) {
+            index++;
+            continue;
+         }
 
          // QR كـ PNG buffer
-         const qrPng = await QRCode.toBuffer(qrUrl, {
+         const qrPng = await QRCode.toBuffer(qrData, {
             type: "png",
             width: 512,
             margin: 1,
@@ -318,10 +337,13 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
 
          // نص تحت QR
          if (showText) {
-            doc.fontSize(9).text(`Ruche: ${hive.hive_code}`, baseX, baseY + labelSize + mmToPt(1), {
-               width: labelSize,
-               align: "center",
-            });
+            doc.fontSize(9)
+               .fillColor("#000")
+               .text(`Ruche: ${hive.hive_code}`, baseX, baseY + labelSize + mmToPt(1), {
+                  width: labelSize,
+                  align: "center",
+               });
+
             doc.fontSize(8)
                .fillColor("#444")
                .text(ownerLabel, baseX, baseY + labelSize + mmToPt(5), {
