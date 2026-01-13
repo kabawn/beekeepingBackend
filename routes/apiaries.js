@@ -227,30 +227,29 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
  * ✅ Generate ONE PDF containing QR codes for ALL hives in one apiary
  * QR CONTENT = hive.public_key (RAW) ✅
  *
- * GET /apiaries/:id/hives/qr-pdf?label_mm=50&gap_mm=6&cols=3&text=1
+ * GET /apiaries/:id/hives/qr-pdf?label_mm=40&gap_mm=4&text=1&title=1
  */
 router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
    const { id } = req.params; // apiary_id
    const userId = req.user.id;
 
-   // خيارات للطباعة (اختياري)
-   const labelSizeMm = Number(req.query.label_mm || 50); // 50mm = 5cm
-   const gapMm = Number(req.query.gap_mm || 6); // مسافة بين الملصقات
-   const cols = Math.max(1, Number(req.query.cols || 3)); // عدد الأعمدة
-   const showText = (req.query.text ?? "1") !== "0"; // إظهار النص تحت QR
+   // خيارات للطباعة
+   const labelSizeMm = Number(req.query.label_mm || 40); // ✅ أفضل افتراضيًا من 50mm
+   const gapMm = Number(req.query.gap_mm || 4);
+   const showText = (req.query.text ?? "1") !== "0"; // 1=show, 0=hide
+   const showTitle = (req.query.title ?? "1") !== "0"; // عنوان الصفحة
 
    try {
-      // ✅ تحقق ملكية المنحل
+      // ✅ تحقق ملكية المنحل (للتأكد فقط + نحتاج company_id)
       const ownership = await pool.query(
-         "SELECT apiary_name, company_id FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
+         "SELECT company_id FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
          [id, userId]
       );
-
       if (ownership.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
 
-      const apiary = ownership.rows[0];
+      const { company_id } = ownership.rows[0];
 
       // ✅ جلب خلايا المنحل
       const hivesResult = await pool.query(
@@ -263,17 +262,24 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
          return res.status(404).json({ error: "No hives found for this apiary" });
       }
 
-      // (اختياري) اسم الشركة
-      let ownerLabel = apiary.apiary_name || "BeeStats";
-      if (apiary.company_id) {
+      // ✅ ownerLabel = اسم الشركة (إن وجد) وإلا اسم المستخدم — بدون BeeStats وبدون apiary_name
+      let ownerLabel = "";
+
+      if (company_id) {
          const c = await pool.query(
             "SELECT company_name FROM companies WHERE company_id = $1 LIMIT 1",
-            [apiary.company_id]
+            [company_id]
          );
-         ownerLabel = c.rows[0]?.company_name || ownerLabel;
+         ownerLabel = (c.rows[0]?.company_name || "").trim();
       }
 
-      // ====== تجهيز PDF Response ======
+      if (!ownerLabel) {
+         // ⚠️ عدّل الجدول/العمود حسب مشروعك (users / profiles)
+         const u = await pool.query("SELECT full_name FROM users WHERE id = $1 LIMIT 1", [userId]);
+         ownerLabel = (u.rows[0]?.full_name || "").trim();
+      }
+
+      // ====== PDF Response ======
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="apiary-${id}-qr-codes.pdf"`);
 
@@ -283,62 +289,83 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       // ✅ Register Arabic font AFTER creating doc
       doc.registerFont("AR", fontArabic);
 
-      // مقاسات وتخطيط
-      const pageHeight = doc.page.height;
-
+      // ====== Layout ======
       const labelSize = mmToPt(labelSizeMm);
       const gap = mmToPt(gapMm);
 
-      const startX = doc.page.margins.left;
-      const startY = doc.page.margins.top;
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
 
-      // ارتفاع إضافي للنص تحت QR
-      const textBlock = showText ? mmToPt(10) : 0;
+      const left = doc.page.margins.left;
+      const right = doc.page.margins.right;
+      const top = doc.page.margins.top;
+      const bottom = doc.page.margins.bottom;
 
+      // مسافة عنوان أعلى الصفحة
+      const headerH = showTitle ? mmToPt(10) : 0;
+
+      // ارتفاع النص تحت QR
+      const textH = showText ? mmToPt(12) : 0;
+
+      // مساحة قابلة للاستخدام
+      const usableW = pageW - left - right;
+      const usableH = pageH - top - bottom - headerH;
+
+      // ✅ احسب cols تلقائياً حسب عرض الصفحة (أفضل من تحديدها يدويًا)
+      const cols = Math.max(1, Math.floor((usableW + gap) / (labelSize + gap)));
       const cellW = labelSize + gap;
-      const cellH = labelSize + textBlock + gap;
+      const cellH = labelSize + textH + gap;
 
-      // عدد الصفوف في الصفحة
-      const maxRows = Math.max(
-         1,
-         Math.floor((pageHeight - startY - doc.page.margins.bottom + gap) / cellH)
-      );
+      const rows = Math.max(1, Math.floor((usableH + gap) / cellH));
+      const perPage = cols * rows;
 
-      // عنوان صغير (اختياري)
+      // ✅ توسيط الشبكة أفقياً لتحسين الشكل
+      const gridW = cols * labelSize + (cols - 1) * gap;
+      const startX = left + Math.max(0, (usableW - gridW) / 2);
+      const startY = top + headerH;
+
+      // ====== Title (اختياري) ======
       const drawHeader = () => {
-         doc.font("AR").fontSize(12).text(`BeeStats — ${ownerLabel}`);
-         doc.moveDown(0.5);
+         if (!showTitle) return;
+
+         // عنوان خفيف: اسم المالك + عدد الخلايا
+         const title = ownerLabel ? ownerLabel : " ";
+         doc.font("AR")
+            .fontSize(12)
+            .fillColor("#000")
+            .text(title, left, top - mmToPt(2), { align: "left" });
+
+         doc.font("AR")
+            .fontSize(9)
+            .fillColor("#666")
+            .text(`Ruches: ${hives.length}`, left, top + mmToPt(3), { align: "left" });
+
+         doc.fillColor("#000");
       };
 
       drawHeader();
 
-      let index = 0;
+      // ====== Draw QR grid ======
+      for (let i = 0; i < hives.length; i++) {
+         const hive = hives[i];
 
-      for (const hive of hives) {
-         // صفحة جديدة لو امتلأت
-         const pos = index; // يبدأ من 0
-         const perPage = cols * maxRows;
-
-         if (pos > 0 && pos % perPage === 0) {
+         // صفحة جديدة
+         if (i > 0 && i % perPage === 0) {
             doc.addPage();
             drawHeader();
          }
 
-         const localPos = pos % perPage;
+         const localPos = i % perPage;
          const col = localPos % cols;
          const row = Math.floor(localPos / cols);
 
-         const baseX = startX + col * cellW;
-         const baseY = startY + mmToPt(8) + row * cellH; // +8mm تحت العنوان
+         const x = startX + col * cellW;
+         const y = startY + row * cellH;
 
-         // ✅ QR DATA = public_key فقط
          const qrData = String(hive.public_key || "").trim();
-         if (!qrData) {
-            index++;
-            continue;
-         }
+         if (!qrData) continue;
 
-         // QR كـ PNG buffer
+         // QR buffer
          const qrPng = await QRCode.toBuffer(qrData, {
             type: "png",
             width: 512,
@@ -346,30 +373,45 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
             errorCorrectionLevel: "M",
          });
 
-         // رسم QR
-         doc.image(qrPng, baseX, baseY, { width: labelSize, height: labelSize });
+         // ✅ إطار بسيط (يحسن شكل الملصق عند القص)
+         doc.roundedRect(
+            x - mmToPt(1),
+            y - mmToPt(1),
+            labelSize + mmToPt(2),
+            labelSize + textH + mmToPt(2),
+            4
+         )
+            .lineWidth(0.5)
+            .strokeColor("#E6E6E6")
+            .stroke()
+            .strokeColor("#000");
 
-         // نص تحت QR
+         // QR
+         doc.image(qrPng, x, y, { width: labelSize, height: labelSize });
+
+         // نص
          if (showText) {
+            // سطر 1: Ruche: XX-YY
             doc.font("AR")
                .fontSize(9)
                .fillColor("#000")
-               .text(`Ruche: ${hive.hive_code}`, baseX, baseY + labelSize + mmToPt(1), {
+               .text(`Ruche: ${hive.hive_code}`, x, y + labelSize + mmToPt(1), {
                   width: labelSize,
                   align: "center",
                });
 
-            doc.font("AR")
-               .fontSize(9)
-               .fillColor("#444")
-               .text(ownerLabel, baseX, baseY + labelSize + mmToPt(6), {
-                  width: labelSize,
-                  align: "center",
-               })
-               .fillColor("#000");
+            // سطر 2: اسم الشركة/المستخدم (اختياري لو فاضي)
+            if (ownerLabel) {
+               doc.font("AR")
+                  .fontSize(9)
+                  .fillColor("#444")
+                  .text(ownerLabel, x, y + labelSize + mmToPt(6), {
+                     width: labelSize,
+                     align: "center",
+                  })
+                  .fillColor("#000");
+            }
          }
-
-         index++;
       }
 
       doc.end();
