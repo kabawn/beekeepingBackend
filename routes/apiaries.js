@@ -5,6 +5,17 @@ const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 const PDFDocument = require("pdfkit");
 const QRCode = require("qrcode");
+const path = require("path");
+
+const fontArabic = path.join(
+   __dirname,
+   "..",
+   "assets",
+   "fonts",
+   "NotoNaskhArabic-VariableFont_wght.ttf"
+);
+
+// تسجيل الخط
 
 // mm -> points (PDF uses points)
 const mmToPt = (mm) => mm * 2.83464567;
@@ -269,6 +280,9 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       const doc = new PDFDocument({ size: "A4", margin: mmToPt(10) });
       doc.pipe(res);
 
+      // ✅ Register Arabic font AFTER creating doc
+      doc.registerFont("AR", fontArabic);
+
       // مقاسات وتخطيط
       const pageHeight = doc.page.height;
 
@@ -292,7 +306,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
 
       // عنوان صغير (اختياري)
       const drawHeader = () => {
-         doc.fontSize(12).fillColor("#000").text(`BeeStats — ${ownerLabel}`, { align: "left" });
+         doc.font("AR").fontSize(12).text(`BeeStats — ${ownerLabel}`);
          doc.moveDown(0.5);
       };
 
@@ -337,16 +351,18 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
 
          // نص تحت QR
          if (showText) {
-            doc.fontSize(9)
+            doc.font("AR")
+               .fontSize(9)
                .fillColor("#000")
                .text(`Ruche: ${hive.hive_code}`, baseX, baseY + labelSize + mmToPt(1), {
                   width: labelSize,
                   align: "center",
                });
 
-            doc.fontSize(8)
+            doc.font("AR")
+               .fontSize(9)
                .fillColor("#444")
-               .text(ownerLabel, baseX, baseY + labelSize + mmToPt(5), {
+               .text(ownerLabel, baseX, baseY + labelSize + mmToPt(6), {
                   width: labelSize,
                   align: "center",
                })
