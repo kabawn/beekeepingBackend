@@ -293,66 +293,57 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
  *
  * GET /apiaries/:id/hives/qr-pdf?label_mm=40&gap_mm=4&text=1&title=1
  */
+/**
+ * ✅ A4 PDF — QR labels for ALL hives in one apiary
+ * ✅ QR CONTENT = hive.public_key (RAW)
+ * ✅ Header (top of page): apiary_name (Arabic-safe as PNG)
+ * ✅ Under each QR: hive_code ONLY (no "Ruche", no owner name)
+ *
+ * GET /apiaries/:id/hives/qr-pdf?label_mm=40&gap_mm=4&text=1&title=1
+ */
+
 router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
    const { id } = req.params; // apiary_id
    const userId = req.user.id;
 
-   const labelSizeMm = Number(req.query.label_mm || 40);
-   const gapMm = Number(req.query.gap_mm || 4);
-   const showText = (req.query.text ?? "1") !== "0";
-   const showTitle = (req.query.title ?? "1") !== "0";
+   // --- print options ---
+   const labelSizeMm = Number(req.query.label_mm || 40); // QR size
+   const gapMm = Number(req.query.gap_mm || 4); // gap between labels
+   const showText = (req.query.text ?? "1") !== "0"; // show hive_code
+   const showTitle = (req.query.title ?? "1") !== "0"; // show apiary title
 
    try {
-      // ✅ ownership + company_id
+      // ✅ ownership + apiary_name
       const ownership = await pool.query(
-         "SELECT company_id FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
+         "SELECT apiary_name FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
          [id, userId]
       );
+
       if (ownership.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
-      const { company_id } = ownership.rows[0];
+
+      const apiaryName = String(ownership.rows[0]?.apiary_name || "").trim();
 
       // ✅ hives
       const hivesResult = await pool.query(
          "SELECT hive_id, hive_code, public_key FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
          [id]
       );
+
       const hives = hivesResult.rows || [];
       if (hives.length === 0) {
          return res.status(404).json({ error: "No hives found for this apiary" });
       }
 
-      // ✅ ownerLabel: company_name else user_profiles.full_name
-      let ownerLabel = "";
-
-      if (company_id) {
-         const c = await pool.query(
-            "SELECT company_name FROM companies WHERE company_id = $1 LIMIT 1",
-            [company_id]
-         );
-         ownerLabel = (c.rows[0]?.company_name || "").trim();
-      }
-
-      if (!ownerLabel) {
-         const u = await pool.query(
-            "SELECT full_name FROM user_profiles WHERE user_id = $1 LIMIT 1",
-            [userId]
-         );
-         ownerLabel = (u.rows[0]?.full_name || "").trim();
-      }
-
-      // normalize spaces
-      ownerLabel = ownerLabel.replace(/\s+/g, " ").trim();
-
-      // ===== PDF =====
+      // ===== PDF headers =====
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="apiary-${id}-qr-codes.pdf"`);
 
       const doc = new PDFDocument({ size: "A4", margin: mmToPt(10) });
       doc.pipe(res);
 
-      // Layout
+      // ===== Layout =====
       const labelSize = mmToPt(labelSizeMm);
       const gap = mmToPt(gapMm);
 
@@ -364,12 +355,15 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       const top = doc.page.margins.top;
       const bottom = doc.page.margins.bottom;
 
-      const headerH = showTitle ? mmToPt(10) : 0;
-      const textH = showText ? mmToPt(12) : 0;
+      // header area height (only once per page)
+      const headerH = showTitle ? mmToPt(14) : 0; // gives space for title + small line
+      // text area under each QR
+      const textH = showText ? mmToPt(10) : 0;
 
       const usableW = pageW - left - right;
       const usableH = pageH - top - bottom - headerH;
 
+      // auto columns based on printable width
       const cols = Math.max(1, Math.floor((usableW + gap) / (labelSize + gap)));
       const cellW = labelSize + gap;
       const cellH = labelSize + textH + gap;
@@ -377,53 +371,58 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       const rows = Math.max(1, Math.floor((usableH + gap) / cellH));
       const perPage = cols * rows;
 
+      // center grid horizontally
       const gridW = cols * labelSize + (cols - 1) * gap;
       const startX = left + Math.max(0, (usableW - gridW) / 2);
       const startY = top + headerH;
 
-      // ✅ Pre-render title + owner name to PNG (Arabic-safe)
+      // ===== Header (apiary name only) — Arabic-safe =====
       const titlePng =
-         showTitle && ownerLabel
-            ? hasArabic(ownerLabel)
-               ? renderTextPng(ownerLabel, { width: 520, height: 40, fontSize: 26, color: "#000" })
-               : renderTextPngLTR(ownerLabel, {
-                    width: 520,
-                    height: 40,
-                    fontSize: 18,
+         showTitle && apiaryName
+            ? hasArabic(apiaryName)
+               ? renderTextPng(apiaryName, {
+                    width: 900,
+                    height: 60,
+                    fontSize: 34,
+                    color: "#000",
+                    fontFamily: "NotoNaskhArabic",
+                 })
+               : renderTextPngLTR(apiaryName, {
+                    width: 900,
+                    height: 60,
+                    fontSize: 26,
                     color: "#000",
                  })
             : null;
 
-      const countPng = showTitle
-         ? renderTextPngLTR(String(hives.length), {
-              width: 80,
-              height: 30,
-              fontSize: 14,
-              color: "#666",
-           })
-         : null;
-
-      const ownerPng = ownerLabel
-         ? hasArabic(ownerLabel)
-            ? renderTextPng(ownerLabel, { width: 260, height: 40, fontSize: 22, color: "#444" })
-            : renderTextPngLTR(ownerLabel, { width: 260, height: 40, fontSize: 14, color: "#444" })
-         : null;
-
-      // Header draw (no French words)
       const drawHeader = () => {
          if (!showTitle) return;
-         if (titlePng)
-            doc.image(titlePng, left, top - mmToPt(2), { width: mmToPt(120), height: mmToPt(10) });
-         if (countPng)
-            doc.image(countPng, left, top + mmToPt(6), { width: mmToPt(18), height: mmToPt(7) });
+
+         // title (apiary name)
+         if (titlePng) {
+            // keep within page width (in points). 170mm is safe on A4 with margins
+            doc.image(titlePng, left, top - mmToPt(2), {
+               width: mmToPt(170),
+               height: mmToPt(12),
+            });
+         }
+
+         // thin line under the title for a clean A4 look
+         doc.moveTo(left, top + mmToPt(12))
+            .lineTo(pageW - right, top + mmToPt(12))
+            .lineWidth(0.7)
+            .strokeColor("#E6E6E6")
+            .stroke()
+            .strokeColor("#000");
       };
 
       drawHeader();
 
-      // Draw labels
+      // ===== Labels =====
       for (let i = 0; i < hives.length; i++) {
          const hive = hives[i];
 
+         // new page
          if (i > 0 && i % perPage === 0) {
             doc.addPage();
             drawHeader();
@@ -446,7 +445,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
             errorCorrectionLevel: "M",
          });
 
-         // soft border
+         // light border (good for cutting)
          doc.roundedRect(
             x - mmToPt(1),
             y - mmToPt(1),
@@ -459,24 +458,17 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
             .stroke()
             .strokeColor("#000");
 
+         // QR
          doc.image(qrPng, x, y, { width: labelSize, height: labelSize });
 
+         // Under QR: hive_code only
          if (showText) {
-            // ✅ Hive code ONLY (no Ruche)
             doc.fontSize(10)
                .fillColor("#000")
                .text(String(hive.hive_code || ""), x, y + labelSize + mmToPt(2), {
                   width: labelSize,
                   align: "center",
                });
-
-            // ✅ owner name as PNG (Arabic safe)
-            if (ownerPng) {
-               doc.image(ownerPng, x, y + labelSize + mmToPt(6), {
-                  width: labelSize,
-                  height: mmToPt(10),
-               });
-            }
          }
       }
 
