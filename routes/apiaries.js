@@ -463,7 +463,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
 
          // Under QR: hive_code only
          if (showText) {
-            doc.fontSize(10)
+            doc.fontSize(16)
                .fillColor("#000")
                .text(String(hive.hive_code || ""), x, y + labelSize + mmToPt(2), {
                   width: labelSize,
