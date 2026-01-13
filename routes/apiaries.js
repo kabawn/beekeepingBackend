@@ -275,7 +275,11 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
 
       if (!ownerLabel) {
          // ⚠️ عدّل الجدول/العمود حسب مشروعك (users / profiles)
-         const u = await pool.query("SELECT full_name FROM users WHERE id = $1 LIMIT 1", [userId]);
+         const u = await pool.query(
+            "SELECT full_name FROM user_profiles WHERE user_id = $1 LIMIT 1",
+            [userId]
+         );
+
          ownerLabel = (u.rows[0]?.full_name || "").trim();
       }
 
