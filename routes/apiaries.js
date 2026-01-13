@@ -6,6 +6,7 @@ const authenticateUser = require("../middlewares/authMiddleware");
 const PDFDocument = require("pdfkit");
 const QRCode = require("qrcode");
 const path = require("path");
+const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
 
 const fontArabic = path.join(
    __dirname,
@@ -15,10 +16,66 @@ const fontArabic = path.join(
    "NotoNaskhArabic-VariableFont_wght.ttf"
 );
 
+try {
+   GlobalFonts.registerFromPath(fontArabic, "NotoNaskhArabic");
+   console.log("✅ Arabic font registered:", fontArabic);
+} catch (e) {
+   console.warn("⚠️ Could not register Arabic font:", e?.message || e);
+}
+
 // تسجيل الخط
 
 // mm -> points (PDF uses points)
 const mmToPt = (mm) => mm * 2.83464567;
+
+// Render text to PNG (fixes Arabic RTL + shaping problems in PDFKit)
+function renderTextPng(
+   text,
+   { width = 240, height = 46, fontSize = 22, color = "#444", fontFamily = "NotoNaskhArabic" } = {}
+) {
+   const canvas = createCanvas(width, height);
+   const ctx = canvas.getContext("2d");
+
+   // Transparent background
+   ctx.clearRect(0, 0, width, height);
+
+   // font
+   ctx.font = `${fontSize}px "${fontFamily}"`;
+   ctx.fillStyle = color;
+   ctx.textAlign = "center";
+   ctx.textBaseline = "middle";
+
+   // RTL (canvas supports direction; shaping handled by font renderer)
+   ctx.direction = "rtl";
+
+   // Draw
+   ctx.fillText(String(text || ""), width / 2, height / 2);
+
+   return canvas.toBuffer("image/png");
+}
+
+// Light fallback for non-arabic (still ok as PNG)
+function renderTextPngLTR(text, opts = {}) {
+   const canvas = createCanvas(opts.width || 240, opts.height || 46);
+   const ctx = canvas.getContext("2d");
+
+   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+   ctx.font = `${opts.fontSize || 18}px "Arial"`;
+   ctx.fillStyle = opts.color || "#444";
+   ctx.textAlign = "center";
+   ctx.textBaseline = "middle";
+   ctx.direction = "ltr";
+
+   ctx.fillText(String(text || ""), canvas.width / 2, canvas.height / 2);
+
+   return canvas.toBuffer("image/png");
+}
+
+function hasArabic(text) {
+   return /[\u0600-\u06FF]/.test(String(text || ""));
+}
+
 // helper: normalize array of productions
 function normalizeProductions(raw, mainProd) {
    if (Array.isArray(raw) && raw.length > 0) {
@@ -229,18 +286,24 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
  *
  * GET /apiaries/:id/hives/qr-pdf?label_mm=40&gap_mm=4&text=1&title=1
  */
+/**
+ * ✅ ONE PDF for ALL hives in one apiary
+ * ✅ QR CONTENT = hive.public_key (RAW)
+ * ✅ Under QR: hive_code only + ownerLabel (as PNG for Arabic correctness)
+ *
+ * GET /apiaries/:id/hives/qr-pdf?label_mm=40&gap_mm=4&text=1&title=1
+ */
 router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
    const { id } = req.params; // apiary_id
    const userId = req.user.id;
 
-   // خيارات للطباعة
-   const labelSizeMm = Number(req.query.label_mm || 40); // ✅ أفضل افتراضيًا من 50mm
+   const labelSizeMm = Number(req.query.label_mm || 40);
    const gapMm = Number(req.query.gap_mm || 4);
-   const showText = (req.query.text ?? "1") !== "0"; // 1=show, 0=hide
-   const showTitle = (req.query.title ?? "1") !== "0"; // عنوان الصفحة
+   const showText = (req.query.text ?? "1") !== "0";
+   const showTitle = (req.query.title ?? "1") !== "0";
 
    try {
-      // ✅ تحقق ملكية المنحل (للتأكد فقط + نحتاج company_id)
+      // ✅ ownership + company_id
       const ownership = await pool.query(
          "SELECT company_id FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
          [id, userId]
@@ -248,21 +311,19 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       if (ownership.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
-
       const { company_id } = ownership.rows[0];
 
-      // ✅ جلب خلايا المنحل
+      // ✅ hives
       const hivesResult = await pool.query(
          "SELECT hive_id, hive_code, public_key FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
          [id]
       );
-
       const hives = hivesResult.rows || [];
       if (hives.length === 0) {
          return res.status(404).json({ error: "No hives found for this apiary" });
       }
 
-      // ✅ ownerLabel = اسم الشركة (إن وجد) وإلا اسم المستخدم — بدون BeeStats وبدون apiary_name
+      // ✅ ownerLabel: company_name else user_profiles.full_name
       let ownerLabel = "";
 
       if (company_id) {
@@ -274,26 +335,24 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       }
 
       if (!ownerLabel) {
-         // ⚠️ عدّل الجدول/العمود حسب مشروعك (users / profiles)
          const u = await pool.query(
             "SELECT full_name FROM user_profiles WHERE user_id = $1 LIMIT 1",
             [userId]
          );
-
          ownerLabel = (u.rows[0]?.full_name || "").trim();
       }
 
-      // ====== PDF Response ======
+      // normalize spaces
+      ownerLabel = ownerLabel.replace(/\s+/g, " ").trim();
+
+      // ===== PDF =====
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="apiary-${id}-qr-codes.pdf"`);
 
       const doc = new PDFDocument({ size: "A4", margin: mmToPt(10) });
       doc.pipe(res);
 
-      // ✅ Register Arabic font AFTER creating doc
-      doc.registerFont("AR", fontArabic);
-
-      // ====== Layout ======
+      // Layout
       const labelSize = mmToPt(labelSizeMm);
       const gap = mmToPt(gapMm);
 
@@ -305,17 +364,12 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       const top = doc.page.margins.top;
       const bottom = doc.page.margins.bottom;
 
-      // مسافة عنوان أعلى الصفحة
       const headerH = showTitle ? mmToPt(10) : 0;
-
-      // ارتفاع النص تحت QR
       const textH = showText ? mmToPt(12) : 0;
 
-      // مساحة قابلة للاستخدام
       const usableW = pageW - left - right;
       const usableH = pageH - top - bottom - headerH;
 
-      // ✅ احسب cols تلقائياً حسب عرض الصفحة (أفضل من تحديدها يدويًا)
       const cols = Math.max(1, Math.floor((usableW + gap) / (labelSize + gap)));
       const cellW = labelSize + gap;
       const cellH = labelSize + textH + gap;
@@ -323,37 +377,53 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       const rows = Math.max(1, Math.floor((usableH + gap) / cellH));
       const perPage = cols * rows;
 
-      // ✅ توسيط الشبكة أفقياً لتحسين الشكل
       const gridW = cols * labelSize + (cols - 1) * gap;
       const startX = left + Math.max(0, (usableW - gridW) / 2);
       const startY = top + headerH;
 
-      // ====== Title (اختياري) ======
+      // ✅ Pre-render title + owner name to PNG (Arabic-safe)
+      const titlePng =
+         showTitle && ownerLabel
+            ? hasArabic(ownerLabel)
+               ? renderTextPng(ownerLabel, { width: 520, height: 40, fontSize: 26, color: "#000" })
+               : renderTextPngLTR(ownerLabel, {
+                    width: 520,
+                    height: 40,
+                    fontSize: 18,
+                    color: "#000",
+                 })
+            : null;
+
+      const countPng = showTitle
+         ? renderTextPngLTR(String(hives.length), {
+              width: 80,
+              height: 30,
+              fontSize: 14,
+              color: "#666",
+           })
+         : null;
+
+      const ownerPng = ownerLabel
+         ? hasArabic(ownerLabel)
+            ? renderTextPng(ownerLabel, { width: 260, height: 40, fontSize: 22, color: "#444" })
+            : renderTextPngLTR(ownerLabel, { width: 260, height: 40, fontSize: 14, color: "#444" })
+         : null;
+
+      // Header draw (no French words)
       const drawHeader = () => {
          if (!showTitle) return;
-
-         // عنوان خفيف: اسم المالك + عدد الخلايا
-         const title = ownerLabel ? ownerLabel : " ";
-         doc.font("AR")
-            .fontSize(12)
-            .fillColor("#000")
-            .text(title, left, top - mmToPt(2), { align: "left" });
-
-         doc.font("AR")
-            .fontSize(9)
-            .fillColor("#666")
-            .text(`Ruches: ${hives.length}`, left, top + mmToPt(3), { align: "left" });
-
-         doc.fillColor("#000");
+         if (titlePng)
+            doc.image(titlePng, left, top - mmToPt(2), { width: mmToPt(120), height: mmToPt(10) });
+         if (countPng)
+            doc.image(countPng, left, top + mmToPt(6), { width: mmToPt(18), height: mmToPt(7) });
       };
 
       drawHeader();
 
-      // ====== Draw QR grid ======
+      // Draw labels
       for (let i = 0; i < hives.length; i++) {
          const hive = hives[i];
 
-         // صفحة جديدة
          if (i > 0 && i % perPage === 0) {
             doc.addPage();
             drawHeader();
@@ -369,7 +439,6 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
          const qrData = String(hive.public_key || "").trim();
          if (!qrData) continue;
 
-         // QR buffer
          const qrPng = await QRCode.toBuffer(qrData, {
             type: "png",
             width: 512,
@@ -377,7 +446,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
             errorCorrectionLevel: "M",
          });
 
-         // ✅ إطار بسيط (يحسن شكل الملصق عند القص)
+         // soft border
          doc.roundedRect(
             x - mmToPt(1),
             y - mmToPt(1),
@@ -390,30 +459,23 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
             .stroke()
             .strokeColor("#000");
 
-         // QR
          doc.image(qrPng, x, y, { width: labelSize, height: labelSize });
 
-         // نص
          if (showText) {
-            // سطر 1: Ruche: XX-YY
-            doc.font("AR")
-               .fontSize(9)
+            // ✅ Hive code ONLY (no Ruche)
+            doc.fontSize(10)
                .fillColor("#000")
-               .text(`Ruche: ${hive.hive_code}`, x, y + labelSize + mmToPt(1), {
+               .text(String(hive.hive_code || ""), x, y + labelSize + mmToPt(2), {
                   width: labelSize,
                   align: "center",
                });
 
-            // سطر 2: اسم الشركة/المستخدم (اختياري لو فاضي)
-            if (ownerLabel) {
-               doc.font("AR")
-                  .fontSize(9)
-                  .fillColor("#444")
-                  .text(ownerLabel, x, y + labelSize + mmToPt(6), {
-                     width: labelSize,
-                     align: "center",
-                  })
-                  .fillColor("#000");
+            // ✅ owner name as PNG (Arabic safe)
+            if (ownerPng) {
+               doc.image(ownerPng, x, y + labelSize + mmToPt(6), {
+                  width: labelSize,
+                  height: mmToPt(10),
+               });
             }
          }
       }
