@@ -6,15 +6,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🌍 Add logging middleware
-app.use((req, res, next) => {
-   console.log(`📡 ${req.method} Request to ${req.url}`);
-   console.log("🔹 Headers:", req.headers);
-   console.log("🔹 Body:", req.body);
-   console.log("🔹 Params:", req.params);
-   console.log("🔹 Query:", req.query);
-   next();
-});
+// 🌍 Logging middleware (DISABLED – leaks sensitive data)
+// app.use((req, res, next) => {
+//    console.log(`📡 ${req.method} Request to ${req.url}`);
+//    console.log("🔹 Headers:", req.headers);
+//    console.log("🔹 Body:", req.body);
+//    console.log("🔹 Params:", req.params);
+//    console.log("🔹 Query:", req.query);
+//    next();
+// });
+
 
 // Import routers
 const apiariesRouter = require("./routes/apiaries");
