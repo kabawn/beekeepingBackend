@@ -165,7 +165,7 @@ router.post("/", authenticateUser, async (req, res) => {
        DO UPDATE SET
          is_active = TRUE,
          deactivated_at = NULL`,
-                  [id, p]
+                  [apiaryId, p] // ✅ FIX HERE
                )
             )
          );
