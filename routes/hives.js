@@ -7,8 +7,93 @@ const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
-// 🐝 إنشاء خلية جديدة (يدوي أو بمفتاح QR موجود)
-// routes/hives.js
+/**
+ * -----------------------------
+ * ✅ Helpers: Authorization
+ * -----------------------------
+ */
+
+// ✅ Ensure apiary belongs to current user
+async function assertApiaryOwnership(apiaryId, userId) {
+   const { data, error } = await supabase
+      .from("apiaries")
+      .select("apiary_id, owner_user_id")
+      .eq("apiary_id", apiaryId)
+      .eq("owner_user_id", userId)
+      .maybeSingle();
+
+   if (error) return { ok: false, error: error.message };
+   if (!data) return { ok: false, error: "Forbidden" };
+   return { ok: true, apiary: data };
+}
+
+// ✅ Get hive only if it belongs to current user (via apiary owner)
+async function getHiveIfOwnedByUser(hiveId, userId, select = "*") {
+   const { data, error } = await supabase
+      .from("hives")
+      .select(
+         `
+         ${select},
+         apiaries!inner(owner_user_id, apiary_name, company_id)
+       `
+      )
+      .eq("hive_id", hiveId)
+      .eq("apiaries.owner_user_id", userId)
+      .maybeSingle();
+
+   if (error) return { ok: false, error: error.message };
+   if (!data) return { ok: false, error: "Hive not found" };
+   return { ok: true, hive: data };
+}
+
+// ✅ Get hive by code only if owned
+async function getHiveByCodeIfOwned(code, userId, select = "*") {
+   const { data, error } = await supabase
+      .from("hives")
+      .select(
+         `
+         ${select},
+         apiaries!inner(owner_user_id, apiary_name, company_id)
+       `
+      )
+      .eq("hive_code", code)
+      .eq("apiaries.owner_user_id", userId)
+      .maybeSingle();
+
+   if (error) return { ok: false, error: error.message };
+   if (!data) return { ok: false, error: "Hive not found" };
+   return { ok: true, hive: data };
+}
+
+// ✅ Get hive by public_key only if owned
+async function getHiveByPublicKeyIfOwned(
+   publicKey,
+   userId,
+   select = "hive_code, apiary_id, public_key"
+) {
+   const { data, error } = await supabase
+      .from("hives")
+      .select(
+         `
+         ${select},
+         apiaries!inner(owner_user_id, apiary_name, company_id)
+       `
+      )
+      .eq("public_key", publicKey)
+      .eq("apiaries.owner_user_id", userId)
+      .maybeSingle();
+
+   if (error) return { ok: false, error: error.message };
+   if (!data) return { ok: false, error: "Hive not found" };
+   return { ok: true, hive: data };
+}
+
+/**
+ * -----------------------------
+ * ✅ POST /hives
+ * Create hive (manual OR from available_public_keys)
+ * -----------------------------
+ */
 router.post("/", authenticateUser, async (req, res) => {
    const {
       hive_type,
@@ -19,11 +104,15 @@ router.post("/", authenticateUser, async (req, res) => {
       public_key, // optional (QR)
    } = req.body;
 
-   const userId = req.user.id; // 👈 owner of the keys / connected user
+   const userId = req.user.id;
 
    if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
 
    try {
+      // ✅ 0) Ensure apiary belongs to this user
+      const ownApiary = await assertApiaryOwnership(apiary_id, userId);
+      if (!ownApiary.ok) return res.status(403).json({ error: "Forbidden: apiary not yours" });
+
       let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
       let finalHiveCode;
 
@@ -55,10 +144,8 @@ router.post("/", authenticateUser, async (req, res) => {
          }
 
          finalHiveCode = availableKey.code;
-
-         // ⚠️ We will delete this row AFTER hive insert succeeds
       } else {
-         // ✅ No public_key → generate hive_code as before
+         // ✅ No public_key → generate hive_code as before (per apiary)
          const { data: lastHives } = await supabase
             .from("hives")
             .select("hive_code")
@@ -110,12 +197,16 @@ router.post("/", authenticateUser, async (req, res) => {
    }
 });
 
-// 🆕 Global hive count for the logged-in user (Supabase version)
+/**
+ * -----------------------------
+ * ✅ GET /hives/count/global
+ * Count all hives for logged user
+ * -----------------------------
+ */
 router.get("/count/global", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
    try {
-      // 1) Get all apiaries for this user
       const { data: apiaries, error: apiaryError } = await supabase
          .from("apiaries")
          .select("apiary_id")
@@ -132,7 +223,6 @@ router.get("/count/global", authenticateUser, async (req, res) => {
 
       const apiaryIds = apiaries.map((a) => a.apiary_id);
 
-      // 2) Count hives where apiary_id is in this list
       const { count, error: hiveError } = await supabase
          .from("hives")
          .select("hive_id", { count: "exact", head: true })
@@ -150,30 +240,37 @@ router.get("/count/global", authenticateUser, async (req, res) => {
    }
 });
 
-// 🖼️ تحميل صورة QR
-router.get("/qr-download/:public_key", async (req, res) => {
+/**
+ * -----------------------------
+ * ✅ GET /hives/qr-download/:public_key
+ * 🔒 Protected + ownership check
+ * -----------------------------
+ */
+router.get("/qr-download/:public_key", authenticateUser, async (req, res) => {
    const { public_key } = req.params;
+   const userId = req.user.id;
+
    try {
-      const { data: hive } = await supabase
-         .from("hives")
-         .select("hive_code, apiary_id")
-         .eq("public_key", public_key)
-         .single();
+      // ✅ Only allow if hive belongs to this user
+      const owned = await getHiveByPublicKeyIfOwned(
+         public_key,
+         userId,
+         "hive_code, apiary_id, public_key"
+      );
+      if (!owned.ok) {
+         // return 404 to avoid leaking existence
+         return res.status(404).json({ error: "Hive not found" });
+      }
 
-      if (!hive) return res.status(404).json({ error: "Hive not found" });
+      const hive = owned.hive;
 
-      const { data: apiary } = await supabase
-         .from("apiaries")
-         .select("company_id, owner_user_id")
-         .eq("apiary_id", hive.apiary_id)
-         .single();
-
+      // label: company name if exists
       let label = "Hive Owner";
-      if (apiary?.company_id) {
+      if (hive.apiaries?.company_id) {
          const { data: company } = await supabase
             .from("companies")
             .select("company_name")
-            .eq("company_id", apiary.company_id)
+            .eq("company_id", hive.apiaries.company_id)
             .single();
          label = company?.company_name || label;
       }
@@ -206,41 +303,34 @@ router.get("/qr-download/:public_key", async (req, res) => {
 });
 
 /**
- * ⚠️ ORDER MATTERS: put /by-code BEFORE /:id so /:id
- * doesn’t swallow /by-code/...
+ * ⚠️ ORDER MATTERS: put /by-code BEFORE /:id
  */
-// ✅ GET hive by hive_code (ORDERED BEFORE /:id)
+
+// ✅ GET hive by hive_code (🔒 ownership protected)
 router.get("/by-code/:code", authenticateUser, async (req, res) => {
    const { code } = req.params;
-   try {
-      const { data, error } = await supabase
-         .from("hives")
-         .select("*")
-         .eq("hive_code", code)
-         .single();
+   const userId = req.user.id;
 
-      if (error || !data) return res.status(404).json({ error: "Hive not found" });
-      res.status(200).json(data);
+   try {
+      const owned = await getHiveByCodeIfOwned(code, userId, "*");
+      if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
+
+      // remove join object if you don't want it in response:
+      const { apiaries, ...cleanHive } = owned.hive;
+      return res.status(200).json(cleanHive);
    } catch (err) {
       console.error("❌ Error fetching hive by code:", err);
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// ✅ PATCH hive (generic update, incl. reassign apiary)
+// ✅ PATCH hive (🔒 ownership protected)
 router.patch("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
    const patch = req.body || {};
 
-   // Only allow fields you intend to update
-   const allowed = [
-      "apiary_id",
-      "hive_type",
-      "hive_purpose",
-      "empty_weight",
-      "frame_capacity",
-      // add other updatable fields here
-   ];
+   const allowed = ["apiary_id", "hive_type", "hive_purpose", "empty_weight", "frame_capacity"];
    const updatePayload = Object.fromEntries(
       Object.entries(patch).filter(([k]) => allowed.includes(k))
    );
@@ -250,6 +340,17 @@ router.patch("/:id", authenticateUser, async (req, res) => {
    }
 
    try {
+      // ✅ 1) ensure hive belongs to user
+      const owned = await getHiveIfOwnedByUser(id, userId, "hive_id, apiary_id");
+      if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
+
+      // ✅ 2) if apiary_id is being changed, ensure NEW apiary is owned too
+      if (updatePayload.apiary_id) {
+         const ownApiary = await assertApiaryOwnership(updatePayload.apiary_id, userId);
+         if (!ownApiary.ok)
+            return res.status(403).json({ error: "Forbidden: target apiary not yours" });
+      }
+
       const { data, error } = await supabase
          .from("hives")
          .update(updatePayload)
@@ -267,13 +368,24 @@ router.patch("/:id", authenticateUser, async (req, res) => {
    }
 });
 
-// (Optional) dedicated reassign endpoint
+// (Optional) dedicated reassign endpoint (🔒 ownership protected)
 router.patch("/:id/reassign", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
    const { apiary_id } = req.body;
+
    if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
 
    try {
+      // ✅ ensure hive belongs to user
+      const owned = await getHiveIfOwnedByUser(id, userId, "hive_id, apiary_id");
+      if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
+
+      // ✅ ensure target apiary belongs to user
+      const ownApiary = await assertApiaryOwnership(apiary_id, userId);
+      if (!ownApiary.ok)
+         return res.status(403).json({ error: "Forbidden: target apiary not yours" });
+
       const { data, error } = await supabase
          .from("hives")
          .update({ apiary_id })
@@ -284,49 +396,46 @@ router.patch("/:id/reassign", authenticateUser, async (req, res) => {
       if (error) return res.status(400).json({ error: error.message });
       if (!data) return res.status(404).json({ error: "Hive not found" });
 
-      res.status(200).json({ hive: data, message: "Hive reassigned successfully" });
+      return res.status(200).json({ hive: data, message: "Hive reassigned successfully" });
    } catch (err) {
       console.error("❌ Error reassigning hive:", err);
       res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// ✅ جلب خلية حسب ID
+// ✅ GET hive by ID (🔒 ownership protected)
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
-   try {
-      const { data, error } = await supabase.from("hives").select("*").eq("hive_id", id).single();
+   const userId = req.user.id;
 
-      if (error || !data) return res.status(404).json({ error: "Hive not found" });
-      res.status(200).json(data);
+   try {
+      const owned = await getHiveIfOwnedByUser(id, userId, "*");
+      if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
+
+      const { apiaries, ...cleanHive } = owned.hive;
+      return res.status(200).json(cleanHive);
    } catch (err) {
       console.error("Error fetching hive:", err);
-      res.status(500).json({ error: "Unexpected server error while fetching hive" });
+      return res.status(500).json({ error: "Unexpected server error while fetching hive" });
    }
 });
 
-// 🔍 Get apiary name by hive_id
+// 🔍 Get apiary name by hive_id (🔒 ownership protected)
 router.get("/:id/apiary-name", authenticateUser, async (req, res) => {
    const { id } = req.params;
+   const userId = req.user.id;
+
    try {
-      const { data: hive, error: hiveError } = await supabase
-         .from("hives")
-         .select("apiary_id")
-         .eq("hive_id", id)
-         .single();
-      if (hiveError || !hive) return res.status(404).json({ error: "Hive not found" });
+      const owned = await getHiveIfOwnedByUser(id, userId, "apiary_id");
+      if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
 
-      const { data: apiary, error: apiaryError } = await supabase
-         .from("apiaries")
-         .select("apiary_name")
-         .eq("apiary_id", hive.apiary_id)
-         .single();
-      if (apiaryError || !apiary) return res.status(404).json({ error: "Apiary not found" });
+      const apiaryName = owned.hive.apiaries?.apiary_name || null;
+      if (!apiaryName) return res.status(404).json({ error: "Apiary not found" });
 
-      res.status(200).json({ apiary_name: apiary.apiary_name });
+      return res.status(200).json({ apiary_name: apiaryName });
    } catch (err) {
       console.error("Error fetching apiary name:", err);
-      res.status(500).json({ error: "Unexpected server error" });
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 

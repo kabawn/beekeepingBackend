@@ -198,7 +198,8 @@ function analyzeInspection(insp) {
    if (fc === null) reason_codes.push("DATA_MISSING_FRAME_COUNT");
    if (bf === null) reason_codes.push("DATA_MISSING_BEE_FRAMES");
    if (brf === null) reason_codes.push("DATA_MISSING_BROOD_FRAMES");
-   if (larvae_present === null || larvae_present === undefined) reason_codes.push("DATA_MISSING_LARVAE");
+   if (larvae_present === null || larvae_present === undefined)
+      reason_codes.push("DATA_MISSING_LARVAE");
    if (varroa === null || varroa === undefined) reason_codes.push("DATA_MISSING_VARROA");
 
    // ---------- Priority 1: sickness ----------
@@ -492,7 +493,11 @@ router.post("/", authenticateUser, async (req, res) => {
       return res.status(400).json({ error: "brood_frames cannot be greater than bee_frames" });
    }
 
-   if (larvae_present !== undefined && larvae_present !== null && typeof larvae_present !== "boolean") {
+   if (
+      larvae_present !== undefined &&
+      larvae_present !== null &&
+      typeof larvae_present !== "boolean"
+   ) {
       return res.status(400).json({ error: "larvae_present must be boolean" });
    }
 
@@ -576,6 +581,8 @@ router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
         `
          )
          .eq("hive_id", hive_id)
+         .eq("user_id", req.user.id)
+
          .order("inspection_date", { ascending: false });
 
       if (error) return res.status(400).json({ error: error.message });
@@ -585,13 +592,17 @@ router.get("/hive/:hive_id", authenticateUser, async (req, res) => {
 
          const frameCapacity = insp.hives?.frame_capacity ?? null;
          const missingFrames =
-            frameCapacity != null && insp.frame_count != null ? frameCapacity - insp.frame_count : null;
+            frameCapacity != null && insp.frame_count != null
+               ? frameCapacity - insp.frame_count
+               : null;
 
          const bee_ratio =
             insp.frame_count && insp.bee_frames != null ? insp.bee_frames / insp.frame_count : null;
 
          const brood_ratio =
-            insp.frame_count && insp.brood_frames != null ? insp.brood_frames / insp.frame_count : null;
+            insp.frame_count && insp.brood_frames != null
+               ? insp.brood_frames / insp.frame_count
+               : null;
 
          return {
             ...insp,
@@ -645,6 +656,8 @@ router.get("/hive/:hive_id/summary", authenticateUser, async (req, res) => {
         `
          )
          .eq("hive_id", hive_id)
+         .eq("user_id", req.user.id)
+
          .order("inspection_date", { ascending: false })
          .limit(30);
 
@@ -695,7 +708,7 @@ router.get("/alerts/revisits", authenticateUser, async (req, res) => {
         `
          )
          .eq("revisit_needed", true)
-         .eq("hives.apiaries.owner_user_id", req.user.id);
+         .eq("user_id", req.user.id); // ✅ يمنع أي تسريب 100%
 
       if (filter === "today") {
          query = query.eq("revisit_date", todayStr);
