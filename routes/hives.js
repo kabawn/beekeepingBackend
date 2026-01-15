@@ -13,6 +13,57 @@ const authenticateUser = require("../middlewares/authMiddleware");
  * -----------------------------
  */
 
+// helper: generate next code (01-01 .. 99-99) based on user's existing hives
+async function generateNextHiveCodeForUser(userId) {
+   // 1) get all user's apiaries ids
+   const { data: apiaries, error: apiErr } = await supabase
+      .from("apiaries")
+      .select("apiary_id")
+      .eq("owner_user_id", userId);
+
+   if (apiErr) throw new Error(apiErr.message);
+
+   const apiaryIds = (apiaries || []).map((a) => a.apiary_id);
+
+   let hiveRows = [];
+   if (apiaryIds.length > 0) {
+      const { data: hives, error: hiveErr } = await supabase
+         .from("hives")
+         .select("hive_code")
+         .in("apiary_id", apiaryIds);
+
+      if (hiveErr) throw new Error(hiveErr.message);
+      hiveRows = hives || [];
+   }
+
+   let maxVal = 0;
+
+   for (const row of hiveRows) {
+      const code = String(row.hive_code || "");
+      const [L, R] = code.split("-");
+      const left = parseInt(L, 10);
+      const right = parseInt(R, 10);
+      if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
+      if (left < 1 || left > 99 || right < 1 || right > 99) continue;
+      const v = left * 100 + right;
+      if (v > maxVal) maxVal = v;
+   }
+
+   if (maxVal === 0) return "01-01";
+
+   let left = Math.floor(maxVal / 100);
+   let right = maxVal % 100;
+
+   right += 1;
+   if (right > 99) {
+      right = 1;
+      left += 1;
+   }
+   if (left > 99) throw new Error("HIVE_CODE_LIMIT_REACHED");
+
+   return `${String(left).padStart(2, "0")}-${String(right).padStart(2, "0")}`;
+}
+
 // ✅ Ensure apiary belongs to current user
 async function assertApiaryOwnership(apiaryId, userId) {
    const { data, error } = await supabase
@@ -94,94 +145,102 @@ async function getHiveByPublicKeyIfOwned(
  * Create hive (manual OR from available_public_keys)
  * -----------------------------
  */
+// 🐝 CREATE HIVE (FINAL LOGIC)
 router.post("/", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+
    const {
       hive_type,
       hive_purpose,
       empty_weight,
       frame_capacity,
       apiary_id,
-      public_key, // optional (QR)
+      public_key, // optional
    } = req.body;
-
-   const userId = req.user.id;
 
    if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
 
    try {
-      // ✅ 0) Ensure apiary belongs to this user
-      const ownApiary = await assertApiaryOwnership(apiary_id, userId);
-      if (!ownApiary.ok) return res.status(403).json({ error: "Forbidden: apiary not yours" });
+      // ✅ 1) SECURITY: apiary must belong to this user
+      const { data: apiary, error: apiaryErr } = await supabase
+         .from("apiaries")
+         .select("apiary_id, owner_user_id")
+         .eq("apiary_id", apiary_id)
+         .maybeSingle();
 
-      let finalPublicKey = public_key?.trim().toLowerCase() || uuidv4();
-      let finalHiveCode;
-
-      // If public_key provided → ensure not already used
-      if (public_key) {
-         // 1) Make sure this key is not already used by an existing hive
-         const { data: existing } = await supabase
-            .from("hives")
-            .select("hive_id")
-            .ilike("public_key", finalPublicKey.trim())
-            .maybeSingle();
-
-         if (existing) {
-            return res.status(400).json({ error: "Public key already used" });
-         }
-
-         // 2) Fetch from available_public_keys *for THIS USER ONLY*
-         const { data: availableKey, error: availableError } = await supabase
-            .from("available_public_keys")
-            .select("code")
-            .ilike("public_key", finalPublicKey.trim())
-            .eq("owner_user_id", userId)
-            .single();
-
-         if (availableError || !availableKey) {
-            return res.status(400).json({
-               error: "Public key not found in your available keys",
-            });
-         }
-
-         finalHiveCode = availableKey.code;
-      } else {
-         // ✅ No public_key → generate hive_code as before (per apiary)
-         const { data: lastHives } = await supabase
-            .from("hives")
-            .select("hive_code")
-            .eq("apiary_id", apiary_id)
-            .order("hive_code", { ascending: false })
-            .limit(1);
-
-         const lastCode = lastHives?.[0]?.hive_code || `${String(apiary_id).padStart(2, "0")}-00`;
-         const [prefix, lastNum] = lastCode.split("-");
-         const nextNum = String(parseInt(lastNum, 10) + 1).padStart(2, "0");
-         finalHiveCode = `${prefix}-${nextNum}`;
+      if (apiaryErr) return res.status(400).json({ error: apiaryErr.message });
+      if (!apiary || apiary.owner_user_id !== userId) {
+         return res.status(403).json({ error: "You don't have access to this apiary." });
       }
 
-      const qrCode = `https://yourapp.com/hive/${finalPublicKey}`;
+      // ✅ 2) final public_key
+      const finalPublicKey = (public_key?.trim().toLowerCase() || uuidv4()).toLowerCase();
 
-      // INSERT HIVE
+      // ✅ 3) Decide hive_code based on whether user has QR ready or not
+      let hive_code = null;
+
+      // ---- CASE A: user provided public_key (QR جاهز) ----
+      if (public_key) {
+         // (A1) ensure not already used by any hive
+         const { data: existingHive, error: existErr } = await supabase
+            .from("hives")
+            .select("hive_id")
+            .eq("public_key", finalPublicKey)
+            .maybeSingle();
+
+         if (existErr) return res.status(400).json({ error: existErr.message });
+         if (existingHive) return res.status(400).json({ error: "Public key already used" });
+
+         // (A2) fetch fixed code from available_public_keys for THIS user
+         const { data: available, error: availableErr } = await supabase
+            .from("available_public_keys")
+            .select("public_key, code")
+            .eq("public_key", finalPublicKey)
+            .eq("owner_user_id", userId)
+            .maybeSingle();
+
+         if (availableErr) return res.status(400).json({ error: availableErr.message });
+         if (!available) {
+            return res.status(400).json({ error: "Public key not found in your available keys" });
+         }
+
+         // ✅ IMPORTANT: keep the code as-is (fixed)
+         hive_code = available.code;
+      }
+
+      // ---- CASE B: no public_key => auto-generate NN-NN ----
+      if (!public_key) {
+         hive_code = await generateNextHiveCodeForUser(userId);
+      }
+
+      const qr_code = `https://yourapp.com/hive/${finalPublicKey}`;
+
+      // ✅ 4) insert hive
       const { data: hive, error } = await supabase
          .from("hives")
          .insert([
             {
-               hive_code: finalHiveCode,
+               hive_code,
                hive_type,
                hive_purpose,
                empty_weight,
                frame_capacity,
                public_key: finalPublicKey,
-               qr_code: qrCode,
+               qr_code,
                apiary_id,
             },
          ])
          .select()
          .single();
 
-      if (error) return res.status(400).json({ error: error.message });
+      if (error) {
+         if (String(error.message || "").includes("HIVE_CODE_LIMIT_REACHED")) {
+            return res.status(400).json({ error: "Hive code limit reached (99-99)." });
+         }
+         return res.status(400).json({ error: error.message });
+      }
 
-      // 🗑 If a public_key was used, delete it from available_public_keys for this user
+      // ✅ 5) if QR key was used, delete it from available_public_keys (after success)
       if (public_key) {
          await supabase
             .from("available_public_keys")
@@ -192,6 +251,9 @@ router.post("/", authenticateUser, async (req, res) => {
 
       return res.status(201).json({ message: "✅ Hive created successfully", hive });
    } catch (err) {
+      if (err.message === "HIVE_CODE_LIMIT_REACHED") {
+         return res.status(400).json({ error: "Hive code limit reached (99-99)." });
+      }
       console.error("❌ Unexpected error in hive creation:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
@@ -251,20 +313,17 @@ router.get("/qr-download/:public_key", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
    try {
-      // ✅ Only allow if hive belongs to this user
       const owned = await getHiveByPublicKeyIfOwned(
          public_key,
          userId,
          "hive_code, apiary_id, public_key"
       );
       if (!owned.ok) {
-         // return 404 to avoid leaking existence
          return res.status(404).json({ error: "Hive not found" });
       }
 
       const hive = owned.hive;
 
-      // label: company name if exists
       let label = "Hive Owner";
       if (hive.apiaries?.company_id) {
          const { data: company } = await supabase
@@ -315,7 +374,6 @@ router.get("/by-code/:code", authenticateUser, async (req, res) => {
       const owned = await getHiveByCodeIfOwned(code, userId, "*");
       if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
 
-      // remove join object if you don't want it in response:
       const { apiaries, ...cleanHive } = owned.hive;
       return res.status(200).json(cleanHive);
    } catch (err) {
@@ -340,11 +398,9 @@ router.patch("/:id", authenticateUser, async (req, res) => {
    }
 
    try {
-      // ✅ 1) ensure hive belongs to user
       const owned = await getHiveIfOwnedByUser(id, userId, "hive_id, apiary_id");
       if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
 
-      // ✅ 2) if apiary_id is being changed, ensure NEW apiary is owned too
       if (updatePayload.apiary_id) {
          const ownApiary = await assertApiaryOwnership(updatePayload.apiary_id, userId);
          if (!ownApiary.ok)
@@ -377,11 +433,9 @@ router.patch("/:id/reassign", authenticateUser, async (req, res) => {
    if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
 
    try {
-      // ✅ ensure hive belongs to user
       const owned = await getHiveIfOwnedByUser(id, userId, "hive_id, apiary_id");
       if (!owned.ok) return res.status(404).json({ error: "Hive not found" });
 
-      // ✅ ensure target apiary belongs to user
       const ownApiary = await assertApiaryOwnership(apiary_id, userId);
       if (!ownApiary.ok)
          return res.status(403).json({ error: "Forbidden: target apiary not yours" });
