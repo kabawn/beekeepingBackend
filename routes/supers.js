@@ -80,30 +80,29 @@ router.get("/my", authenticateUser, async (req, res) => {
  */
 router.get("/my/stats", authenticateUser, async (req, res) => {
    const userId = req.user.id;
+   const t0 = Date.now();
 
    try {
-      const t0 = Date.now();
+      const { data, error } = await supabase
+         .from("supers")
+         .select("active")
+         .eq("owner_user_id", userId);
 
-      const [{ count: totalAll, error: e1 }, { count: activeAll, error: e2 }] = await Promise.all([
-         supabase
-            .from("supers")
-            .select("super_id", { count: "estimated", head: true })
-            .eq("owner_user_id", userId),
-         supabase
-            .from("supers")
-            .select("super_id", { count: "estimated", head: true })
-            .eq("owner_user_id", userId)
-            .eq("active", true),
-      ]);
+      if (error) throw error;
 
-      if (e1) throw e1;
-      if (e2) throw e2;
+      let total = 0;
+      let active_total = 0;
+
+      if (Array.isArray(data)) {
+         total = data.length;
+         active_total = data.filter((s) => s.active).length;
+      }
 
       console.log("🧠 supers stats ms =", Date.now() - t0);
 
-      return res.json({ total: totalAll || 0, active_total: activeAll || 0 });
+      return res.json({ total, active_total });
    } catch (err) {
-      console.error("❌ Error fetching supers stats:", err);
+      console.error("❌ supers stats error:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
 });
