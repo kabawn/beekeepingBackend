@@ -10,32 +10,37 @@ router.get("/overview", authenticateUser, async (req, res) => {
    try {
       const t0 = Date.now();
 
-      const [apiariesRes, hivesRes, supersRes] = await Promise.all([
-         // عدد المناحل
-         supabase
-            .from("apiaries")
-            .select("apiary_id", { count: "exact", head: true })
-            .eq("owner_user_id", userId),
+      // apiaries
+      const { data: apiaries, count: apiariesCount } = await supabase
+         .from("apiaries")
+         .select("apiary_id", { count: "exact" })
+         .eq("owner_user_id", userId);
 
-         // عدد الخلايا
-         supabase
+      const apiaryIds = (apiaries || []).map((a) => a.apiary_id);
+
+      // hives
+      let hivesCount = 0;
+      if (apiaryIds.length) {
+         const { count } = await supabase
             .from("hives")
             .select("hive_id", { count: "exact", head: true })
-            .eq("owner_user_id", userId),
+            .in("apiary_id", apiaryIds);
 
-         // عدد العاسلات
-         supabase
-            .from("supers")
-            .select("super_id", { count: "estimated", head: true })
-            .eq("owner_user_id", userId),
-      ]);
+         hivesCount = count || 0;
+      }
+
+      // supers (مرتبطة مباشرة بالمستخدم)
+      const { count: supersCount } = await supabase
+         .from("supers")
+         .select("super_id", { count: "estimated", head: true })
+         .eq("owner_user_id", userId);
 
       console.log("🧠 dashboard overview ms =", Date.now() - t0);
 
       res.json({
-         apiaries: apiariesRes.count || 0,
-         hives: hivesRes.count || 0,
-         supers: supersRes.count || 0,
+         apiaries: apiariesCount || 0,
+         hives: hivesCount,
+         supers: supersCount || 0,
       });
    } catch (err) {
       console.error("❌ Dashboard overview error:", err);
