@@ -63,6 +63,7 @@ const hiveDescriptorsRouter = require("./routes/hiveDescriptors");
 const hivePerformanceRouter = require("./routes/hivePerformance");
 const analyticsEvaluationsLongRouter = require("./routes/analyticsEvaluationsLong");
 const queenRoutes = require("./routes/queen");
+const dashboardRouter = require("./routes/dashboard");
 
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
@@ -100,6 +101,7 @@ app.use("/api/hive-descriptors", hiveDescriptorsRouter);
 app.use("/api/hive-performance", hivePerformanceRouter);
 app.use("/api/analytics", analyticsEvaluationsLongRouter);
 app.use("/api/queen", queenRoutes);
+app.use("/api/dashboard", dashboardRouter);
 
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");
