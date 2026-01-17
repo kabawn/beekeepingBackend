@@ -108,4 +108,6 @@ const HOST = "0.0.0.0";
 
 app.listen(PORT, HOST, () => {
    console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+   console.log("✅ BOOT: LOGGER VERSION = 2026-01-17-A");
+   console.log("✅ BOOT FILE:", __filename);
 });
