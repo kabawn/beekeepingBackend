@@ -6,6 +6,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+   const start = Date.now();
+
+   res.on("finish", () => {
+      const ms = Date.now() - start;
+      console.log(`➡️ ${req.method} ${req.originalUrl} -> ${res.statusCode} (${ms}ms)`);
+   });
+
+   next();
+});
+
 // 🌍 Logging middleware (DISABLED – leaks sensitive data)
 // app.use((req, res, next) => {
 //    console.log(`📡 ${req.method} Request to ${req.url}`);
@@ -15,7 +26,6 @@ app.use(express.json());
 //    console.log("🔹 Query:", req.query);
 //    next();
 // });
-
 
 // Import routers
 const apiariesRouter = require("./routes/apiaries");
