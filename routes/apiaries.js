@@ -208,8 +208,11 @@ router.get("/:id/hives/count", authenticateUser, async (req, res) => {
 
 // GET USER APIARIES (with productions[])
 router.get("/", authenticateUser, async (req, res) => {
+   const tTotal0 = Date.now();
+   const userId = req.user.id;
+
    try {
-      const userId = req.user.id;
+      const tDb0 = Date.now();
 
       const result = await pool.query(
          `
@@ -230,10 +233,16 @@ router.get("/", authenticateUser, async (req, res) => {
          [userId]
       );
 
-      res.json({ apiaries: result.rows });
+      const dbMs = Date.now() - tDb0;
+      const totalMs = Date.now() - tTotal0;
+
+      console.log("🧠 DB /api/apiaries ms =", dbMs);
+      console.log("⏱️ TOTAL /api/apiaries ms =", totalMs);
+
+      return res.json({ apiaries: result.rows, perf: { dbMs, totalMs } });
    } catch (error) {
       console.error("Error fetching apiaries for user:", error);
-      res.status(500).json({ error: "Server error while fetching user apiaries" });
+      return res.status(500).json({ error: "Server error while fetching user apiaries" });
    }
 });
 

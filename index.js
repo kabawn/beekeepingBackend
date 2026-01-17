@@ -8,16 +8,6 @@ app.use(express.json());
 
 app.set("etag", false);
 
-app.use("/api", (req, res, next) => {
-   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-   res.setHeader(
-      "Cache-Control",
-      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0"
-   );
-   res.setHeader("Expires", "0");
-   next();
-});
-
 // 🔎 Safe request logger
 app.use((req, res, next) => {
    const start = Date.now();
