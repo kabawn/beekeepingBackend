@@ -4,109 +4,177 @@ const router = express.Router();
 const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 
+/**
+ * Query params:
+ * - from=YYYY-MM-DD (inclusive)
+ * - to=YYYY-MM-DD   (exclusive)
+ * - q=string        (search)
+ * - limit=number
+ * - offset=number
+ */
+
 function parseRange(q) {
-  const from = q.from ? new Date(`${q.from}T00:00:00.000Z`) : null;
-  const to   = q.to   ? new Date(`${q.to}T00:00:00.000Z`)   : null; // exclusive
-  return { from, to };
+   const from = q.from ? new Date(`${q.from}T00:00:00.000Z`) : null;
+   const to = q.to ? new Date(`${q.to}T00:00:00.000Z`) : null; // exclusive
+   return { from, to };
 }
 
-/**
- * GET /api/harvest-analysis/by-hive?from=YYYY-MM-DD&to=YYYY-MM-DD
- * Analyse par ruche (owner-scoped) + détail des hausses utilisées.
- * Utilise maintenant hive_id/apiary_id/net_honey_kg enregistrés dans harvests.
- */
-router.get("/by-hive", authenticateUser, async (req, res) => {
-  const userId = req.user.id;
-  const { from, to } = parseRange(req.query || {});
+function parsePaging(q) {
+   const limitRaw = parseInt(q.limit, 10);
+   const offsetRaw = parseInt(q.offset, 10);
 
-  try {
-    const query = `
-      WITH base AS (
+   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 10), 200) : 80;
+   const offset = Number.isFinite(offsetRaw) ? Math.max(offsetRaw, 0) : 0;
+
+   return { limit, offset };
+}
+
+function parseSearch(q) {
+   const s = (q.q || "").toString().trim();
+   return s ? s : null;
+}
+
+// ----------------------------------------------------
+// /by-hive
+// ----------------------------------------------------
+router.get("/by-hive", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { from, to } = parseRange(req.query || {});
+   const { limit, offset } = parsePaging(req.query || {});
+   const q = parseSearch(req.query || {});
+
+   try {
+      const sql = `
+      WITH fh AS (
+        SELECT hive_id, apiary_id, super_id, net_honey_kg, harvest_date
+        FROM harvests
+        WHERE user_id = $1
+          AND ($2::timestamptz IS NULL OR harvest_date >= $2::timestamptz)
+          AND ($3::timestamptz IS NULL OR harvest_date <  $3::timestamptz)
+      ),
+      joined AS (
         SELECT
-          h.hive_id,
+          fh.hive_id,
           h.hive_code,
+          fh.apiary_id,
           a.apiary_name,
+          fh.super_id,
           s.super_code,
-          SUM(har.net_honey_kg)::float8 AS net_kg,
-          COUNT(*)::int                  AS harvests
-        FROM harvests har
-        LEFT JOIN hives    h ON har.hive_id   = h.hive_id
-        LEFT JOIN apiaries a ON har.apiary_id = a.apiary_id
-        LEFT JOIN supers   s ON har.super_id  = s.super_id
-        WHERE har.user_id = $1
-          AND ($2::timestamptz IS NULL OR har.harvest_date >= $2::timestamptz)
-          AND ($3::timestamptz IS NULL OR har.harvest_date <  $3::timestamptz)
-        GROUP BY h.hive_id, h.hive_code, a.apiary_name, s.super_code
+          fh.net_honey_kg,
+          fh.harvest_date
+        FROM fh
+        LEFT JOIN hives    h ON fh.hive_id   = h.hive_id
+        LEFT JOIN apiaries a ON fh.apiary_id = a.apiary_id
+        LEFT JOIN supers   s ON fh.super_id  = s.super_id
+        WHERE ($4::text IS NULL
+          OR (h.hive_code ILIKE ('%'||$4||'%')
+              OR a.apiary_name ILIKE ('%'||$4||'%'))
+        )
+      ),
+      base AS (
+        SELECT
+          hive_id,
+          hive_code,
+          apiary_name,
+          super_code,
+          SUM(net_honey_kg)::float8 AS net_kg,
+          COUNT(*)::int AS harvests,
+          MAX(harvest_date) AS last_harvest_at
+        FROM joined
+        GROUP BY hive_id, hive_code, apiary_name, super_code
+      ),
+      agg AS (
+        SELECT
+          hive_id,
+          hive_code AS hive_identifier,
+          apiary_name,
+          SUM(net_kg)::float8 AS total_honey,
+          MAX(last_harvest_at) AS last_harvest_at,
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'super_code', super_code,
+              'net_kg',     ROUND(net_kg::numeric, 3),
+              'harvests',   harvests
+            )
+            ORDER BY net_kg DESC
+          ) AS supers_breakdown
+        FROM base
+        GROUP BY hive_id, hive_code, apiary_name
       )
-      SELECT
-        hive_id,
-        hive_code AS hive_identifier,
-        apiary_name,
-        SUM(net_kg)::float8 AS total_honey,
-        ARRAY_AGG(DISTINCT super_code) AS super_codes,
-        JSON_AGG(
-          JSON_BUILD_OBJECT(
-            'super_code', super_code,
-            'net_kg',     ROUND(net_kg::numeric, 3),
-            'harvests',   harvests
-          )
-          ORDER BY net_kg DESC
-        ) AS supers_breakdown
-      FROM base
-      GROUP BY hive_id, hive_code, apiary_name
-      ORDER BY total_honey DESC;
+      SELECT *
+      FROM agg
+      ORDER BY last_harvest_at DESC NULLS LAST
+      LIMIT $5 OFFSET $6;
     `;
 
-    const params = [
-      userId,
-      from ? from.toISOString() : null,
-      to   ? to.toISOString()   : null,
-    ];
+      const params = [
+         userId,
+         from ? from.toISOString() : null,
+         to ? to.toISOString() : null,
+         q,
+         limit,
+         offset,
+      ];
 
-    const result = await pool.query(query, params);
-    res.json(result.rows);
-  } catch (error) {
-    console.error("❌ Error in harvest analysis by hive:", error);
-    res.status(500).json({ error: "Server error while fetching harvest analysis by hive" });
-  }
+      const result = await pool.query(sql, params);
+      res.json(result.rows);
+   } catch (error) {
+      console.error("❌ Error in harvest analysis by hive:", error);
+      res.status(500).json({ error: "Server error while fetching harvest analysis by hive" });
+   }
 });
 
-/**
- * GET /api/harvest-analysis/by-apiary?from=YYYY-MM-DD&to=YYYY-MM-DD
- * Analyse par rucher (owner-scoped) + hausses utilisées.
- */
+// ----------------------------------------------------
+// /by-apiary
+// ----------------------------------------------------
 router.get("/by-apiary", authenticateUser, async (req, res) => {
-  const userId = req.user.id;
-  const { from, to } = parseRange(req.query || {});
+   const userId = req.user.id;
+   const { from, to } = parseRange(req.query || {});
+   const { limit, offset } = parsePaging(req.query || {});
+   const q = parseSearch(req.query || {});
 
-  try {
-    const query = `
-      WITH base AS (
+   try {
+      const sql = `
+      WITH fh AS (
+        SELECT hive_id, apiary_id, super_id, net_honey_kg, harvest_date
+        FROM harvests
+        WHERE user_id = $1
+          AND ($2::timestamptz IS NULL OR harvest_date >= $2::timestamptz)
+          AND ($3::timestamptz IS NULL OR harvest_date <  $3::timestamptz)
+      ),
+      joined AS (
         SELECT
-          a.apiary_id,
+          fh.apiary_id,
           a.apiary_name,
-          h.hive_id,
+          fh.hive_id,
           s.super_code,
-          SUM(har.net_honey_kg)::float8 AS net_kg,
-          COUNT(*)::int                  AS harvests
-        FROM harvests har
-        LEFT JOIN apiaries a ON har.apiary_id = a.apiary_id
-        LEFT JOIN hives    h ON har.hive_id   = h.hive_id
-        LEFT JOIN supers   s ON har.super_id  = s.super_id
-        WHERE har.user_id = $1
-          AND ($2::timestamptz IS NULL OR har.harvest_date >= $2::timestamptz)
-          AND ($3::timestamptz IS NULL OR har.harvest_date <  $3::timestamptz)
-        GROUP BY a.apiary_id, a.apiary_name, h.hive_id, s.super_code
+          fh.net_honey_kg,
+          fh.harvest_date
+        FROM fh
+        LEFT JOIN apiaries a ON fh.apiary_id = a.apiary_id
+        LEFT JOIN supers   s ON fh.super_id  = s.super_id
+        WHERE ($4::text IS NULL OR a.apiary_name ILIKE ('%'||$4||'%'))
+      ),
+      base AS (
+        SELECT
+          apiary_id,
+          apiary_name,
+          hive_id,
+          super_code,
+          SUM(net_honey_kg)::float8 AS net_kg,
+          COUNT(*)::int AS harvests,
+          MAX(harvest_date) AS last_harvest_at
+        FROM joined
+        GROUP BY apiary_id, apiary_name, hive_id, super_code
       ),
       agg AS (
         SELECT
           apiary_id,
           apiary_name,
           SUM(net_kg)::float8 AS total_honey,
-          AVG(net_kg)::float8 AS avg_honey_per_hive_est,
           COUNT(DISTINCT hive_id)::int AS hives_count,
-          COUNT(*)::int                AS supers_rows,
-          ARRAY_AGG(DISTINCT super_code) AS super_codes,
+          COUNT(*)::int AS supers_rows,
+          MAX(last_harvest_at) AS last_harvest_at,
           JSON_AGG(
             JSON_BUILD_OBJECT(
               'super_code', super_code,
@@ -122,27 +190,31 @@ router.get("/by-apiary", authenticateUser, async (req, res) => {
         apiary_id,
         apiary_name,
         total_honey,
-        avg_honey_per_hive_est AS avg_honey_per_hive,
+        (CASE WHEN hives_count > 0 THEN (total_honey / hives_count) ELSE 0 END)::float8 AS avg_honey_per_hive,
         hives_count,
-        supers_rows   AS supers_count,
-        super_codes,
+        supers_rows AS supers_count,
+        last_harvest_at,
         supers_breakdown
       FROM agg
-      ORDER BY total_honey DESC;
+      ORDER BY last_harvest_at DESC NULLS LAST
+      LIMIT $5 OFFSET $6;
     `;
 
-    const params = [
-      userId,
-      from ? from.toISOString() : null,
-      to   ? to.toISOString()   : null,
-    ];
+      const params = [
+         userId,
+         from ? from.toISOString() : null,
+         to ? to.toISOString() : null,
+         q,
+         limit,
+         offset,
+      ];
 
-    const result = await pool.query(query, params);
-    res.json(result.rows);
-  } catch (error) {
-    console.error("❌ Error in harvest analysis by apiary:", error);
-    res.status(500).json({ error: "Server error while fetching harvest analysis by apiary" });
-  }
+      const result = await pool.query(sql, params);
+      res.json(result.rows);
+   } catch (error) {
+      console.error("❌ Error in harvest analysis by apiary:", error);
+      res.status(500).json({ error: "Server error while fetching harvest analysis by apiary" });
+   }
 });
 
 module.exports = router;
