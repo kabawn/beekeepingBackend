@@ -18,7 +18,7 @@ router.get("/users", async (req, res) => {
       const to = from + limit - 1;
 
       let query = supabase
-         .from("user_profile")
+         .from("user_profiles")
          .select("user_id, full_name, avatar_url, phone, user_type, created_at", { count: "exact" })
          .order("created_at", { ascending: false })
          .range(from, to);
