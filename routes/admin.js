@@ -52,4 +52,46 @@ router.get("/users", async (req, res) => {
    }
 });
 
+
+router.get("/kpis", async (req, res) => {
+  try {
+    // Total users
+    const { count: totalUsers, error: totalErr } = await supabase
+      .from("user_profiles")
+      .select("user_id", { count: "exact", head: true });
+
+    if (totalErr) return res.status(500).json({ error: totalErr.message });
+
+    // New users (last 7 days)
+    const from7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { count: new7d, error: new7dErr } = await supabase
+      .from("user_profiles")
+      .select("user_id", { count: "exact", head: true })
+      .gte("created_at", from7d);
+
+    if (new7dErr) return res.status(500).json({ error: new7dErr.message });
+
+    // New users (today)
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const { count: newToday, error: newTodayErr } = await supabase
+      .from("user_profiles")
+      .select("user_id", { count: "exact", head: true })
+      .gte("created_at", startOfToday.toISOString());
+
+    if (newTodayErr) return res.status(500).json({ error: newTodayErr.message });
+
+    return res.json({
+      total_users: totalUsers || 0,
+      new_users_7d: new7d || 0,
+      new_users_today: newToday || 0,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || "Server error" });
+  }
+});
+
+
 module.exports = router;
