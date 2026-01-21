@@ -2,14 +2,18 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../utils/supabaseClient");
 
-// For now: public ping (no auth) just to test dashboard can reach backend
+const authenticateUser = require("../middlewares/authMiddleware");
+const requireAdmin = require("../middlewares/requireAdmin");
+
+router.use(authenticateUser);
+router.use(requireAdmin);
+
 router.get("/ping", (req, res) => {
-   res.json({ ok: true, message: "admin api is alive" });
+   res.json({ ok: true, message: "admin api is alive (protected)" });
 });
 
 router.get("/users", async (req, res) => {
    try {
-      // ?q= search, ?page=1, ?limit=25
       const q = String(req.query.q || "").trim();
       const page = Math.max(parseInt(req.query.page || "1", 10), 1);
       const limit = Math.min(Math.max(parseInt(req.query.limit || "25", 10), 1), 100);
@@ -23,11 +27,7 @@ router.get("/users", async (req, res) => {
          .order("created_at", { ascending: false })
          .range(from, to);
 
-      // search (only columns that exist in user_profile)
-      if (q) {
-         // search by full_name OR phone (safe even if phone is null)
-         query = query.or(`full_name.ilike.%${q}%,phone.ilike.%${q}%`);
-      }
+      if (q) query = query.or(`full_name.ilike.%${q}%,phone.ilike.%${q}%`);
 
       const { data, error, count } = await query;
 
