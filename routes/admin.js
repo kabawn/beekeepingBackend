@@ -118,4 +118,33 @@ router.get("/users/:id", async (req, res) => {
    }
 });
 
+// GET /admin/stats - The "Owner's Pulse"
+router.get("/stats", async (req, res) => {
+  try {
+    // 1. Total Users
+    const { count: userCount } = await supabase
+      .from("user_profiles")
+      .select("*", { count: "exact", head: true });
+
+    // 2. Total Hives (Across all users)
+    const { count: hiveCount } = await supabase
+      .from("hives") 
+      .select("*", { count: "exact", head: true });
+
+    // 3. Total Inspections (Platform Activity)
+    const { count: inspectionCount } = await supabase
+      .from("inspections")
+      .select("*", { count: "exact", head: true });
+
+    res.json({
+      users: userCount || 0,
+      hives: hiveCount || 0,
+      inspections: inspectionCount || 0,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
