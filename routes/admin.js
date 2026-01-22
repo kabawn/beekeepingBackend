@@ -22,20 +22,35 @@ router.get("/users", async (req, res) => {
       const from = (page - 1) * limit;
       const to = from + limit - 1;
 
-      let query = supabase
+      // 1. Fetch users from user_profiles
+      let userQuery = supabase
          .from("user_profiles")
          .select("user_id, full_name, avatar_url, phone, user_type, created_at", { count: "exact" })
          .order("created_at", { ascending: false })
          .range(from, to);
 
-      if (q) query = query.or(`full_name.ilike.%${q}%,phone.ilike.%${q}%`);
+      if (q) userQuery = userQuery.or(`full_name.ilike.%${q}%,phone.ilike.%${q}%`);
 
-      const { data, error, count } = await query;
+      const { data: users, error: userError, count } = await userQuery;
+      if (userError) return res.status(500).json({ error: userError.message });
 
-      if (error) return res.status(500).json({ error: error.message });
+      // 2. Fetch all inspections for these specific users to find their "Last Active" date
+      const userIds = users.map((u) => u.user_id);
 
-      return res.json({
-         items: (data || []).map((u) => ({
+      const { data: activities, error: activityError } = await supabase
+         .from("hive_inspections")
+         .select("user_id, inspection_date") // using inspection_date from your JSON
+         .in("user_id", userIds)
+         .order("inspection_date", { ascending: false });
+
+      if (activityError) console.error("Activity Fetch Error:", activityError);
+
+      // 3. Merge data: Attach the most recent inspection_date to each user
+      const items = users.map((u) => {
+         // Find the first (most recent) inspection for this user
+         const lastInsp = activities?.find((a) => a.user_id === u.user_id);
+
+         return {
             id: u.user_id,
             user_id: u.user_id,
             full_name: u.full_name,
@@ -43,7 +58,12 @@ router.get("/users", async (req, res) => {
             phone: u.phone,
             user_type: u.user_type,
             created_at: u.created_at,
-         })),
+            last_active: lastInsp ? lastInsp.inspection_date : null, // Date of last hive work
+         };
+      });
+
+      return res.json({
+         items,
          total: count || 0,
          page,
          limit,
