@@ -16,55 +16,65 @@ router.get("/ping", (req, res) => {
 router.get("/users", async (req, res) => {
    try {
       const q = String(req.query.q || "").trim();
+      const status = req.query.status; // 'active', 'idle', 'at_risk'
       const page = Math.max(parseInt(req.query.page || "1", 10), 1);
       const limit = Math.min(Math.max(parseInt(req.query.limit || "25", 10), 1), 100);
 
       const from = (page - 1) * limit;
       const to = from + limit - 1;
 
-      // 1. Fetch users from user_profiles
+      // 1. Base Query
       let userQuery = supabase
          .from("user_profiles")
          .select("user_id, full_name, avatar_url, phone, user_type, created_at", { count: "exact" })
-         .order("created_at", { ascending: false })
-         .range(from, to);
+         .order("created_at", { ascending: false });
 
       if (q) userQuery = userQuery.or(`full_name.ilike.%${q}%,phone.ilike.%${q}%`);
 
       const { data: users, error: userError, count } = await userQuery;
       if (userError) return res.status(500).json({ error: userError.message });
 
-      // 2. Fetch all inspections for these specific users to find their "Last Active" date
+      // 2. Fetch Activities
       const userIds = users.map((u) => u.user_id);
-
-      const { data: activities, error: activityError } = await supabase
+      const { data: activities } = await supabase
          .from("hive_inspections")
-         .select("user_id, inspection_date") // using inspection_date from your JSON
+         .select("user_id, inspection_date")
          .in("user_id", userIds)
          .order("inspection_date", { ascending: false });
 
-      if (activityError) console.error("Activity Fetch Error:", activityError);
-
-      // 3. Merge data: Attach the most recent inspection_date to each user
-      const items = users.map((u) => {
-         // Find the first (most recent) inspection for this user
+      // 3. Merge & Logic
+      let items = users.map((u) => {
          const lastInsp = activities?.find((a) => a.user_id === u.user_id);
+         const lastActiveDate = lastInsp ? lastInsp.inspection_date : null;
+
+         // Calculate Status
+         let calculatedStatus = "never";
+         if (lastActiveDate) {
+            const days = Math.ceil((new Date() - new Date(lastActiveDate)) / (1000 * 60 * 60 * 24));
+            if (days <= 7) calculatedStatus = "active";
+            else if (days <= 21) calculatedStatus = "idle";
+            else calculatedStatus = "at_risk";
+         } else {
+            calculatedStatus = "at_risk"; // Never active users are at risk
+         }
 
          return {
+            ...u,
             id: u.user_id,
-            user_id: u.user_id,
-            full_name: u.full_name,
-            avatar_url: u.avatar_url,
-            phone: u.phone,
-            user_type: u.user_type,
-            created_at: u.created_at,
-            last_active: lastInsp ? lastInsp.inspection_date : null, // Date of last hive work
+            last_active: lastActiveDate,
+            status: calculatedStatus,
          };
       });
 
+      // 4. SERVER-SIDE FILTERING
+      // If a status filter is requested, we filter the merged list
+      if (status && status !== "all") {
+         items = items.filter((item) => item.status === status);
+      }
+
       return res.json({
          items,
-         total: count || 0,
+         total: status && status !== "all" ? items.length : count || 0,
          page,
          limit,
       });
@@ -72,7 +82,6 @@ router.get("/users", async (req, res) => {
       return res.status(500).json({ error: e?.message || "Server error" });
    }
 });
-
 // 2. SINGLE USER VIEW
 router.get("/users/:id", async (req, res) => {
    try {
