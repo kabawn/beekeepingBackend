@@ -103,7 +103,7 @@ router.get("/stats", async (req, res) => {
             supabase.from("hives").select("*", { count: "exact", head: true }),
 
             // Total Inspections
-            supabase.from("hives_inspections").select("*", { count: "exact", head: true }),
+            supabase.from("hive_inspections").select("*", { count: "exact", head: true }),
          ]);
 
       res.json({
