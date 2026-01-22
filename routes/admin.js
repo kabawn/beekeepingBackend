@@ -12,6 +12,7 @@ router.get("/ping", (req, res) => {
    res.json({ ok: true, message: "admin api is alive (protected)" });
 });
 
+// 1. USER DIRECTORY (With Pagination & Search)
 router.get("/users", async (req, res) => {
    try {
       const q = String(req.query.q || "").trim();
@@ -52,99 +53,70 @@ router.get("/users", async (req, res) => {
    }
 });
 
-router.get("/kpis", async (req, res) => {
-   try {
-      // Total users
-      const { count: totalUsers, error: totalErr } = await supabase
-         .from("user_profiles")
-         .select("user_id", { count: "exact", head: true });
-
-      if (totalErr) return res.status(500).json({ error: totalErr.message });
-
-      // New users (last 7 days)
-      const from7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-
-      const { count: new7d, error: new7dErr } = await supabase
-         .from("user_profiles")
-         .select("user_id", { count: "exact", head: true })
-         .gte("created_at", from7d);
-
-      if (new7dErr) return res.status(500).json({ error: new7dErr.message });
-
-      // New users (today)
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
-
-      const { count: newToday, error: newTodayErr } = await supabase
-         .from("user_profiles")
-         .select("user_id", { count: "exact", head: true })
-         .gte("created_at", startOfToday.toISOString());
-
-      if (newTodayErr) return res.status(500).json({ error: newTodayErr.message });
-
-      return res.json({
-         total_users: totalUsers || 0,
-         new_users_7d: new7d || 0,
-         new_users_today: newToday || 0,
-      });
-   } catch (e) {
-      return res.status(500).json({ error: e?.message || "Server error" });
-   }
-});
-
-// GET a single user's details
+// 2. SINGLE USER VIEW
 router.get("/users/:id", async (req, res) => {
    try {
       const { id } = req.params;
-
       const { data, error } = await supabase
          .from("user_profiles")
          .select("user_id, full_name, avatar_url, phone, user_type, created_at")
          .eq("user_id", id)
-         .single(); // Use .single() because we only want one object
+         .single();
 
       if (error) {
-         if (error.code === "PGRST116") {
-            // Supabase code for "no rows found"
-            return res.status(404).json({ error: "User not found" });
-         }
+         if (error.code === "PGRST116") return res.status(404).json({ error: "User not found" });
          return res.status(500).json({ error: error.message });
       }
-
-      // Return the object directly
       return res.json(data);
    } catch (e) {
       return res.status(500).json({ error: e?.message || "Server error" });
    }
 });
 
-// GET /admin/stats - The "Owner's Pulse"
+// 3. THE CONSOLIDATED "OWNER'S PULSE" (Stats + Growth)
+// This is what powers your Dashboard cards!
 router.get("/stats", async (req, res) => {
-  try {
-    // 1. Total Users
-    const { count: userCount } = await supabase
-      .from("user_profiles")
-      .select("*", { count: "exact", head: true });
+   try {
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // 2. Total Hives (Across all users)
-    const { count: hiveCount } = await supabase
-      .from("hives") 
-      .select("*", { count: "exact", head: true });
+      // We run all counts in parallel for maximum speed
+      const [totalUsers, newUsersToday, newUsers7d, totalHives, totalInspections] =
+         await Promise.all([
+            // Total Users
+            supabase.from("user_profiles").select("*", { count: "exact", head: true }),
 
-    // 3. Total Inspections (Platform Activity)
-    const { count: inspectionCount } = await supabase
-      .from("inspections")
-      .select("*", { count: "exact", head: true });
+            // New Users Today
+            supabase
+               .from("user_profiles")
+               .select("*", { count: "exact", head: true })
+               .gte("created_at", startOfToday),
 
-    res.json({
-      users: userCount || 0,
-      hives: hiveCount || 0,
-      inspections: inspectionCount || 0,
-      updatedAt: new Date().toISOString()
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+            // New Users Last 7 Days
+            supabase
+               .from("user_profiles")
+               .select("*", { count: "exact", head: true })
+               .gte("created_at", sevenDaysAgo),
+
+            // Total Hives
+            supabase.from("hives").select("*", { count: "exact", head: true }),
+
+            // Total Inspections
+            supabase.from("inspections").select("*", { count: "exact", head: true }),
+         ]);
+
+      res.json({
+         users: totalUsers.count || 0,
+         new_users_today: newUsersToday.count || 0,
+         new_users_7d: newUsers7d.count || 0,
+         hives: totalHives.count || 0,
+         inspections: totalInspections.count || 0,
+         updatedAt: new Date().toISOString(),
+      });
+   } catch (e) {
+      res.status(500).json({ error: e.message });
+   }
 });
 
 module.exports = router;
