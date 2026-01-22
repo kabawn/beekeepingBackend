@@ -52,46 +52,70 @@ router.get("/users", async (req, res) => {
    }
 });
 
-
 router.get("/kpis", async (req, res) => {
-  try {
-    // Total users
-    const { count: totalUsers, error: totalErr } = await supabase
-      .from("user_profiles")
-      .select("user_id", { count: "exact", head: true });
+   try {
+      // Total users
+      const { count: totalUsers, error: totalErr } = await supabase
+         .from("user_profiles")
+         .select("user_id", { count: "exact", head: true });
 
-    if (totalErr) return res.status(500).json({ error: totalErr.message });
+      if (totalErr) return res.status(500).json({ error: totalErr.message });
 
-    // New users (last 7 days)
-    const from7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      // New users (last 7 days)
+      const from7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    const { count: new7d, error: new7dErr } = await supabase
-      .from("user_profiles")
-      .select("user_id", { count: "exact", head: true })
-      .gte("created_at", from7d);
+      const { count: new7d, error: new7dErr } = await supabase
+         .from("user_profiles")
+         .select("user_id", { count: "exact", head: true })
+         .gte("created_at", from7d);
 
-    if (new7dErr) return res.status(500).json({ error: new7dErr.message });
+      if (new7dErr) return res.status(500).json({ error: new7dErr.message });
 
-    // New users (today)
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+      // New users (today)
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
 
-    const { count: newToday, error: newTodayErr } = await supabase
-      .from("user_profiles")
-      .select("user_id", { count: "exact", head: true })
-      .gte("created_at", startOfToday.toISOString());
+      const { count: newToday, error: newTodayErr } = await supabase
+         .from("user_profiles")
+         .select("user_id", { count: "exact", head: true })
+         .gte("created_at", startOfToday.toISOString());
 
-    if (newTodayErr) return res.status(500).json({ error: newTodayErr.message });
+      if (newTodayErr) return res.status(500).json({ error: newTodayErr.message });
 
-    return res.json({
-      total_users: totalUsers || 0,
-      new_users_7d: new7d || 0,
-      new_users_today: newToday || 0,
-    });
-  } catch (e) {
-    return res.status(500).json({ error: e?.message || "Server error" });
-  }
+      return res.json({
+         total_users: totalUsers || 0,
+         new_users_7d: new7d || 0,
+         new_users_today: newToday || 0,
+      });
+   } catch (e) {
+      return res.status(500).json({ error: e?.message || "Server error" });
+   }
 });
 
+// GET a single user's details
+router.get("/users/:id", async (req, res) => {
+   try {
+      const { id } = req.params;
+
+      const { data, error } = await supabase
+         .from("user_profiles")
+         .select("user_id, full_name, avatar_url, phone, user_type, created_at")
+         .eq("user_id", id)
+         .single(); // Use .single() because we only want one object
+
+      if (error) {
+         if (error.code === "PGRST116") {
+            // Supabase code for "no rows found"
+            return res.status(404).json({ error: "User not found" });
+         }
+         return res.status(500).json({ error: error.message });
+      }
+
+      // Return the object directly
+      return res.json(data);
+   } catch (e) {
+      return res.status(500).json({ error: e?.message || "Server error" });
+   }
+});
 
 module.exports = router;
