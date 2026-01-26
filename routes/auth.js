@@ -39,7 +39,6 @@ router.post("/signup", async (req, res) => {
 
    return res.status(201).json({ message: "✅ User created successfully", userId });
 });
-
 // ✅ تسجيل الدخول
 router.post("/login", async (req, res) => {
    const { email, password } = req.body;
@@ -49,7 +48,7 @@ router.post("/login", async (req, res) => {
    }
 
    try {
-      // تسجيل الدخول
+      // 1) تسجيل الدخول
       const { data: sessionData, error: signInError } = await supabase.auth.signInWithPassword({
          email,
          password,
@@ -62,16 +61,31 @@ router.post("/login", async (req, res) => {
       const user = sessionData.user;
       const session = sessionData.session;
 
-      // جلب نوع الاشتراك
+      // 2) جلب نوع الاشتراك
       const { data: subscriptionData } = await supabase
          .from("subscriptions")
          .select("plan_type")
          .eq("user_id", user.id)
          .single();
 
+      // ✅ 3) جلب الاسم من جدول user_profiles
+      const { data: profileData, error: profileErr } = await supabase
+         .from("user_profiles")
+         .select("full_name")
+         .eq("user_id", user.id)
+         .single();
+
+      if (profileErr) {
+         console.warn("profile fetch error:", profileErr.message);
+      }
+
+      // ✅ 4) ارجاع user فيه full_name
       return res.status(200).json({
          message: "✅ Login successful",
-         user,
+         user: {
+            ...user,
+            full_name: profileData?.full_name || null,
+         },
          access_token: session.access_token,
          refresh_token: session.refresh_token,
          plan: subscriptionData?.plan_type || "free",
@@ -136,7 +150,7 @@ router.post("/reset-password", async (req, res) => {
          userId,
          {
             password: new_password,
-         }
+         },
       );
 
       if (updateError) {
