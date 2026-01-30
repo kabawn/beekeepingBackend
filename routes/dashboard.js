@@ -32,8 +32,29 @@ router.get("/overview", authenticateUser, async (req, res) => {
       // supers (مرتبطة مباشرة بالمستخدم)
       const { count: supersCount } = await supabase
          .from("supers")
-         .select("super_id", { count: "estimated", head: true })
+         .select("super_id", { count: "exact", head: true })
          .eq("owner_user_id", userId);
+
+      // alerts (global revisits count)
+      const { count: alertsCount, error: alertsErr } = await supabase
+      .from("hive_inspections")
+      .select("inspection_id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("revisit_needed", true);
+
+      if (alertsErr) {
+      console.error("Alerts count error:", alertsErr);
+      }
+
+      // harvests
+      const { count: harvestsCount, error: harvestErr } = await supabase
+      .from("harvests")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId);
+
+      if (harvestErr) {
+      console.error("Harvests count error:", harvestErr);
+      }
 
       console.log("🧠 dashboard overview ms =", Date.now() - t0);
 
@@ -41,6 +62,8 @@ router.get("/overview", authenticateUser, async (req, res) => {
          apiaries: apiariesCount || 0,
          hives: hivesCount,
          supers: supersCount || 0,
+         alerts: alertsCount || 0,
+         harvests: harvestsCount || 0,
       });
    } catch (err) {
       console.error("❌ Dashboard overview error:", err);
