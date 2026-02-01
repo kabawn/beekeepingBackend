@@ -7,13 +7,14 @@ const PDFDocument = require("pdfkit");
 const QRCode = require("qrcode");
 const path = require("path");
 const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
+const DISABLE_FREE_APIARY_LIMIT = true;
 
 const fontArabic = path.join(
    __dirname,
    "..",
    "assets",
    "fonts",
-   "NotoNaskhArabic-VariableFont_wght.ttf"
+   "NotoNaskhArabic-VariableFont_wght.ttf",
 );
 
 try {
@@ -31,7 +32,7 @@ const mmToPt = (mm) => mm * 2.83464567;
 // Render text to PNG (fixes Arabic RTL + shaping problems in PDFKit)
 function renderTextPng(
    text,
-   { width = 240, height = 46, fontSize = 22, color = "#444", fontFamily = "NotoNaskhArabic" } = {}
+   { width = 240, height = 46, fontSize = 22, color = "#444", fontFamily = "NotoNaskhArabic" } = {},
 ) {
    const canvas = createCanvas(width, height);
    const ctx = canvas.getContext("2d");
@@ -104,14 +105,14 @@ router.post("/", authenticateUser, async (req, res) => {
       // 1) subscription
       const subResult = await pool.query(
          "SELECT plan_type FROM subscriptions WHERE user_id = $1 LIMIT 1",
-         [userId]
+         [userId],
       );
       const planType = subResult.rows[0]?.plan_type || "free";
 
-      if (planType === "free") {
+      if (!DISABLE_FREE_APIARY_LIMIT && planType === "free") {
          const countResult = await pool.query(
             "SELECT COUNT(*) FROM apiaries WHERE owner_user_id = $1",
-            [userId]
+            [userId],
          );
          const apiaryCount = parseInt(countResult.rows[0].count, 10);
 
@@ -139,7 +140,7 @@ router.post("/", authenticateUser, async (req, res) => {
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
-         [apiary_name, location, commune, department, land_owner_name, phone, userId, safeMain]
+         [apiary_name, location, commune, department, land_owner_name, phone, userId, safeMain],
       );
 
       const apiary = insertResult.rows[0];
@@ -153,7 +154,7 @@ router.post("/", authenticateUser, async (req, res) => {
             `UPDATE apiary_productions
              SET is_active = TRUE, deactivated_at = NULL
              WHERE apiary_id = $1 AND production_type = ANY($2::text[])`,
-            [apiaryId, prodList]
+            [apiaryId, prodList],
          );
 
          await Promise.all(
@@ -165,9 +166,9 @@ router.post("/", authenticateUser, async (req, res) => {
        DO UPDATE SET
          is_active = TRUE,
          deactivated_at = NULL`,
-                  [apiaryId, p] // ✅ FIX HERE
-               )
-            )
+                  [apiaryId, p], // ✅ FIX HERE
+               ),
+            ),
          );
       }
 
@@ -189,7 +190,7 @@ router.get("/:id/hives/count", authenticateUser, async (req, res) => {
    try {
       const ownership = await pool.query(
          "SELECT 1 FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
-         [id, userId]
+         [id, userId],
       );
 
       if (ownership.rows.length === 0) {
@@ -230,7 +231,7 @@ router.get("/", authenticateUser, async (req, res) => {
          GROUP BY a.apiary_id
          ORDER BY a.apiary_id ASC
          `,
-         [userId]
+         [userId],
       );
 
       const dbMs = Date.now() - tDb0;
@@ -257,7 +258,7 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
       // ✅ تأكد من ملكية المنحل
       const ownership = await pool.query(
          "SELECT 1 FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
-         [id, userId]
+         [id, userId],
       );
 
       if (ownership.rows.length === 0) {
@@ -268,7 +269,7 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
       if (!limit && !offset) {
          const result = await pool.query(
             "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
-            [id]
+            [id],
          );
          return res.json(result.rows);
       }
@@ -279,7 +280,7 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
 
       const result = await pool.query(
          "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC LIMIT $2 OFFSET $3",
-         [id, safeLimit, safeOffset]
+         [id, safeLimit, safeOffset],
       );
 
       return res.json({ hives: result.rows });
@@ -325,7 +326,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       // ✅ ownership + apiary_name
       const ownership = await pool.query(
          "SELECT apiary_name FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
-         [id, userId]
+         [id, userId],
       );
 
       if (ownership.rows.length === 0) {
@@ -337,7 +338,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
       // ✅ hives
       const hivesResult = await pool.query(
          "SELECT hive_id, hive_code, public_key FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
-         [id]
+         [id],
       );
 
       const hives = hivesResult.rows || [];
@@ -460,7 +461,7 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
             y - mmToPt(1),
             labelSize + mmToPt(2),
             labelSize + textH + mmToPt(2),
-            4
+            4,
          )
             .lineWidth(0.5)
             .strokeColor("#E6E6E6")
@@ -510,7 +511,7 @@ router.get("/:id", authenticateUser, async (req, res) => {
            AND a.owner_user_id = $2
          GROUP BY a.apiary_id
          `,
-         [id, userId]
+         [id, userId],
       );
 
       if (result.rows.length === 0) {
@@ -555,7 +556,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
           WHERE apiary_id = $8
           AND owner_user_id = $9
           RETURNING *`,
-         [apiary_name, location, commune, department, land_owner_name, phone, safeMain, id, userId]
+         [apiary_name, location, commune, department, land_owner_name, phone, safeMain, id, userId],
       );
 
       if (result.rows.length === 0) {
@@ -572,7 +573,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
             `UPDATE apiary_productions
              SET is_active = FALSE, deactivated_at = now()
              WHERE apiary_id = $1 AND is_active = TRUE`,
-            [id]
+            [id],
          );
 
          // reactivate existing and insert missing
@@ -580,7 +581,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
             `UPDATE apiary_productions
              SET is_active = TRUE, deactivated_at = NULL
              WHERE apiary_id = $1 AND production_type = ANY($2::text[])`,
-            [id, prodList]
+            [id, prodList],
          );
 
          await Promise.all(
@@ -592,9 +593,9 @@ router.put("/:id", authenticateUser, async (req, res) => {
                      SELECT 1 FROM apiary_productions
                      WHERE apiary_id = $1 AND production_type = $2
                    )`,
-                  [id, p]
-               )
-            )
+                  [id, p],
+               ),
+            ),
          );
       }
 
@@ -613,7 +614,7 @@ router.delete("/:id", authenticateUser, async (req, res) => {
    try {
       const result = await pool.query(
          "DELETE FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 RETURNING *",
-         [id, userId]
+         [id, userId],
       );
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
