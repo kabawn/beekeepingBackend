@@ -46,15 +46,21 @@ router.get("/overview", authenticateUser, async (req, res) => {
       console.error("Alerts count error:", alertsErr);
       }
 
-      // harvests
-      const { count: harvestsCount, error: harvestErr } = await supabase
+      // harvests (SUM net_honey_kg)
+      const { data: harvestRows, error: harvestErr } = await supabase
       .from("harvests")
-      .select("id", { count: "exact", head: true })
+      .select("net_honey_kg")
       .eq("user_id", userId);
 
       if (harvestErr) {
-      console.error("Harvests count error:", harvestErr);
+      console.error("Harvests sum error:", harvestErr);
       }
+
+      const harvestsKg =
+      (harvestRows || []).reduce((sum, r) => sum + (Number(r.net_honey_kg) || 0), 0);
+
+      // arrondi 2 décimales (optionnel)
+      const harvestsTotalKg = Math.round(harvestsKg * 100) / 100;
 
       console.log("🧠 dashboard overview ms =", Date.now() - t0);
 
@@ -63,7 +69,7 @@ router.get("/overview", authenticateUser, async (req, res) => {
          hives: hivesCount,
          supers: supersCount || 0,
          alerts: alertsCount || 0,
-         harvests: harvestsCount || 0,
+         harvests: harvestsTotalKg || 0,
       });
    } catch (err) {
       console.error("❌ Dashboard overview error:", err);
