@@ -4,6 +4,7 @@ const supabase = require("../utils/supabaseClient");
 
 const authenticateUser = require("../middlewares/authMiddleware");
 const requireAdmin = require("../middlewares/requireAdmin");
+const { DateTime } = require("luxon");
 
 router.use(authenticateUser);
 router.use(requireAdmin);
@@ -106,45 +107,91 @@ router.get("/users/:id", async (req, res) => {
 // This is what powers your Dashboard cards!
 router.get("/stats", async (req, res) => {
    try {
-      const now = new Date();
-      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      // ✅ France timezone (Europe/Paris)
+      const startOfTodayParis = DateTime.now().setZone("Europe/Paris").startOf("day").toISO();
 
-      // We run all counts in parallel for maximum speed
-      const [totalUsers, newUsersToday, newUsers7d, totalHives, totalInspections] =
-         await Promise.all([
-            // Total Users
-            supabase.from("user_profiles").select("*", { count: "exact", head: true }),
+      const sevenDaysAgoParis = DateTime.now().setZone("Europe/Paris").minus({ days: 7 }).toISO();
 
-            // New Users Today
-            supabase
-               .from("user_profiles")
-               .select("*", { count: "exact", head: true })
-               .gte("created_at", startOfToday),
+      const [
+         totalUsers,
+         newUsersToday,
+         newUsers7d,
+         totalApiaries,
+         apiariesToday, // ✅ NEW
+         totalHives,
+         totalInspections,
+      ] = await Promise.all([
+         // Total Users
+         supabase.from("user_profiles").select("*", { count: "exact", head: true }),
 
-            // New Users Last 7 Days
-            supabase
-               .from("user_profiles")
-               .select("*", { count: "exact", head: true })
-               .gte("created_at", sevenDaysAgo),
+         // New Users Today
+         supabase
+            .from("user_profiles")
+            .select("*", { count: "exact", head: true })
+            .gte("created_at", startOfTodayParis),
 
-            // Total Hives
-            supabase.from("hives").select("*", { count: "exact", head: true }),
+         // New Users Last 7 Days
+         supabase
+            .from("user_profiles")
+            .select("*", { count: "exact", head: true })
+            .gte("created_at", sevenDaysAgoParis),
 
-            // Total Inspections
-            supabase.from("hive_inspections").select("*", { count: "exact", head: true }),
-         ]);
+         // Total Apiaries (✅ useful for dashboard too)
+         supabase.from("apiaries").select("*", { count: "exact", head: true }),
 
-      res.json({
+         // ✅ Apiaries Created Today
+         supabase
+            .from("apiaries")
+            .select("*", { count: "exact", head: true })
+            .gte("created_at", startOfTodayParis),
+
+         // Total Hives
+         supabase.from("hives").select("*", { count: "exact", head: true }),
+
+         // Total Inspections
+         supabase.from("hive_inspections").select("*", { count: "exact", head: true }),
+      ]);
+
+      return res.json({
          users: totalUsers.count || 0,
          new_users_today: newUsersToday.count || 0,
          new_users_7d: newUsers7d.count || 0,
+
+         apiaries: totalApiaries.count || 0, // ✅ NEW
+         apiaries_today: apiariesToday.count || 0, // ✅ NEW (3️⃣)
+
          hives: totalHives.count || 0,
          inspections: totalInspections.count || 0,
          updatedAt: new Date().toISOString(),
+         timezone: "Europe/Paris",
       });
    } catch (e) {
-      res.status(500).json({ error: e.message });
+      return res.status(500).json({ error: e?.message || "Server error" });
+   }
+});
+
+router.get("/apiaries/today", async (req, res) => {
+   try {
+      const startOfTodayParis = DateTime.now().setZone("Europe/Paris").startOf("day").toISO();
+
+      const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 50);
+
+      const { data, error } = await supabase
+         .from("apiaries")
+         .select("id, apiary_name, city, country, created_at, user_id")
+         .gte("created_at", startOfTodayParis)
+         .order("created_at", { ascending: false })
+         .limit(limit);
+
+      if (error) return res.status(500).json({ error: error.message });
+
+      return res.json({
+         items: data || [],
+         total: data?.length || 0,
+         timezone: "Europe/Paris",
+      });
+   } catch (e) {
+      return res.status(500).json({ error: e?.message || "Server error" });
    }
 });
 
