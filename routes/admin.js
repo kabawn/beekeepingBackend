@@ -105,9 +105,12 @@ router.get("/users/:id", async (req, res) => {
 
 // 3. THE CONSOLIDATED "OWNER'S PULSE" (Stats + Growth)
 // This is what powers your Dashboard cards!
+// 3. THE CONSOLIDATED "OWNER'S PULSE" (Stats + Growth)
 router.get("/stats", async (req, res) => {
    try {
-      // ✅ France timezone (Europe/Paris)
+      const { DateTime } = require("luxon");
+
+      // ✅ France timezone
       const startOfTodayParis = DateTime.now().setZone("Europe/Paris").startOf("day").toISO();
 
       const sevenDaysAgoParis = DateTime.now().setZone("Europe/Paris").minus({ days: 7 }).toISO();
@@ -116,7 +119,7 @@ router.get("/stats", async (req, res) => {
          totalUsers,
          newUsersToday,
          newUsers7d,
-         totalApiaries,
+         totalApiaries, // ✅ NEW
          apiariesToday, // ✅ NEW
          totalHives,
          totalInspections,
@@ -136,7 +139,7 @@ router.get("/stats", async (req, res) => {
             .select("*", { count: "exact", head: true })
             .gte("created_at", sevenDaysAgoParis),
 
-         // Total Apiaries (✅ useful for dashboard too)
+         // ✅ Total Apiaries
          supabase.from("apiaries").select("*", { count: "exact", head: true }),
 
          // ✅ Apiaries Created Today
@@ -157,11 +160,13 @@ router.get("/stats", async (req, res) => {
          new_users_today: newUsersToday.count || 0,
          new_users_7d: newUsers7d.count || 0,
 
-         apiaries: totalApiaries.count || 0, // ✅ NEW
-         apiaries_today: apiariesToday.count || 0, // ✅ NEW (3️⃣)
+         // ✅ NEW
+         apiaries: totalApiaries.count || 0,
+         apiaries_today: apiariesToday.count || 0,
 
          hives: totalHives.count || 0,
          inspections: totalInspections.count || 0,
+
          updatedAt: new Date().toISOString(),
          timezone: "Europe/Paris",
       });
