@@ -252,10 +252,10 @@ router.get("/", authenticateUser, async (req, res) => {
 router.get("/:id/hives", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user.id;
-   const { limit, offset } = req.query;
+   const { limit, offset, include_supers } = req.query;
 
    try {
-      // ✅ تأكد من ملكية المنحل
+      // ✅ ownership
       const ownership = await pool.query(
          "SELECT 1 FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 LIMIT 1",
          [id, userId],
@@ -265,21 +265,93 @@ router.get("/:id/hives", authenticateUser, async (req, res) => {
          return res.status(404).json({ error: "Apiary not found" });
       }
 
-      // 🔹 لو ما فيه limit/offset → سلوك قديم (كل الهفز)
+      const withSupers = String(include_supers || "0") === "1";
+
+      // ==========
+      // 1) NO PAGINATION (legacy)
+      // ==========
       if (!limit && !offset) {
+         if (!withSupers) {
+            const result = await pool.query(
+               "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
+               [id],
+            );
+            return res.json(result.rows);
+         }
+
+         // ✅ With supers (active only)
          const result = await pool.query(
-            "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC",
+            `
+        SELECT
+          h.*,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'super_id', s.super_id,
+                'super_code', s.super_code,
+                'super_type', s.super_type,
+                'active', s.active
+              )
+              ORDER BY s.super_code ASC
+            ) FILTER (WHERE s.super_id IS NOT NULL AND s.active = TRUE),
+            '[]'::json
+          ) AS supers
+        FROM hives h
+        LEFT JOIN supers s ON s.hive_id = h.hive_id
+        WHERE h.apiary_id = $1
+        GROUP BY h.hive_id
+        ORDER BY h.hive_id ASC
+        `,
             [id],
          );
+
          return res.json(result.rows);
       }
 
-      // 🔹 لو فيه pagination
-      const safeLimit = Math.min(parseInt(limit, 10) || 60, 200); // max 200 per page
+      // ==========
+      // 2) PAGINATION
+      // ==========
+      const safeLimit = Math.min(parseInt(limit, 10) || 60, 200);
       const safeOffset = parseInt(offset, 10) || 0;
 
+      if (!withSupers) {
+         const result = await pool.query(
+            "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC LIMIT $2 OFFSET $3",
+            [id, safeLimit, safeOffset],
+         );
+         return res.json({ hives: result.rows });
+      }
+
+      // ✅ With supers + pagination
+      // نجيب أولاً hives page، ثم نعمل join supers عليهم فقط
       const result = await pool.query(
-         "SELECT * FROM hives WHERE apiary_id = $1 ORDER BY hive_id ASC LIMIT $2 OFFSET $3",
+         `
+      WITH page_hives AS (
+        SELECT *
+        FROM hives
+        WHERE apiary_id = $1
+        ORDER BY hive_id ASC
+        LIMIT $2 OFFSET $3
+      )
+      SELECT
+        h.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'super_id', s.super_id,
+              'super_code', s.super_code,
+              'super_type', s.super_type,
+              'active', s.active
+            )
+            ORDER BY s.super_code ASC
+          ) FILTER (WHERE s.super_id IS NOT NULL AND s.active = TRUE),
+          '[]'::json
+        ) AS supers
+      FROM page_hives h
+      LEFT JOIN supers s ON s.hive_id = h.hive_id
+      GROUP BY h.hive_id
+      ORDER BY h.hive_id ASC
+      `,
          [id, safeLimit, safeOffset],
       );
 
