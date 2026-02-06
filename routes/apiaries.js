@@ -511,6 +511,41 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
    }
 });
 
+// -----------------------------
+// GET /apiaries/summary
+// Apiaries list + hives count + last inspection date
+// -----------------------------
+router.get("/summary", authenticateUser, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const sql = `
+      SELECT
+        a.apiary_id,
+        a.apiary_name,
+        COUNT(DISTINCT h.hive_id)::int AS hives_count,
+        MAX(i.inspection_date)        AS last_inspection_date
+      FROM apiaries a
+      LEFT JOIN hives h
+        ON h.apiary_id = a.apiary_id
+      LEFT JOIN hive_inspections i
+        ON i.hive_id = h.hive_id
+       AND i.user_id = $1
+      WHERE a.owner_user_id = $1
+      GROUP BY a.apiary_id, a.apiary_name
+      ORDER BY a.apiary_id::int ASC;
+    `;
+
+    const { rows } = await pool.query(sql, [userId]);
+
+    return res.json({ apiaries: rows });
+  } catch (error) {
+    console.error("Error fetching apiaries summary:", error);
+    return res.status(500).json({ error: "Server error while fetching apiaries summary" });
+  }
+});
+
+
 // GET ONE APIARY (with productions[])
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
@@ -627,6 +662,9 @@ router.put("/:id", authenticateUser, async (req, res) => {
       res.status(500).json({ error: "Server error while updating apiary" });
    }
 });
+
+
+
 
 // DELETE APIARY
 router.delete("/:id", authenticateUser, async (req, res) => {
