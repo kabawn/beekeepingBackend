@@ -121,8 +121,7 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
          .eq("owner_user_id", userId)
          .maybeSingle();
 
-     
-
+ 
       if (error || !data) {
          return res.status(404).json({ error: "Super not found or not owned by user" });
       }
@@ -686,7 +685,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
       if (error) throw error;
 
-      
+      console.log("✅ Super created:", { super_code: finalSuperCode, owner_user_id });
 
       return res.status(201).json(data);
    } catch (err) {
