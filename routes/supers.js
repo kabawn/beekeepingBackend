@@ -54,7 +54,7 @@ router.get("/my", authenticateUser, async (req, res) => {
       let q = supabase
          .from("supers")
          .select(
-            "super_id,super_code,super_type,purpose_super,weight_empty,active,service_in,hive_id,public_key,created_at"
+            "super_id,super_code,super_type,purpose_super,weight_empty,active,service_in,hive_id,public_key,created_at",
          )
          .eq("owner_user_id", userId)
          .order("created_at", { ascending: false })
@@ -87,7 +87,6 @@ router.get("/my/stats", authenticateUser, async (req, res) => {
          .from("supers")
          .select("active")
          .eq("owner_user_id", userId);
-
       if (error) throw error;
 
       let total = 0;
@@ -99,7 +98,6 @@ router.get("/my/stats", authenticateUser, async (req, res) => {
       }
 
       console.log("🧠 supers stats ms =", Date.now() - t0);
-
       return res.json({ total, active_total });
    } catch (err) {
       console.error("❌ supers stats error:", err);
@@ -169,7 +167,7 @@ router.get("/public/:public_key", authenticateUser, async (req, res) => {
             public_key,
             created_at,
             owner_user_id
-         `
+         `,
          )
          .eq("public_key", public_key)
          .maybeSingle();
@@ -351,6 +349,9 @@ router.post("/link", authenticateUser, async (req, res) => {
  * =========================================================
  * ✅ 7) POST /batch
  * =========================================================
+ * Fixes:
+ * - code generation uses last super PER OWNER, not global
+ * - uniqueness: public_key global, super_code per owner
  */
 router.post("/batch", authenticateUser, async (req, res) => {
    const owner_user_id = req.user.id;
@@ -377,6 +378,7 @@ router.post("/batch", authenticateUser, async (req, res) => {
       const finalServiceIn = typeof service_in === "boolean" ? service_in : true;
 
       try {
+         // Resolve type
          const { data: st, error: stErr } = await supabase
             .from("super_types")
             .select("name, weight_empty_kg")
@@ -389,12 +391,14 @@ router.post("/batch", authenticateUser, async (req, res) => {
             continue;
          }
 
-         const { data: existing } = await supabase
+         // public_key must be globally unique (if that's your design)
+         const { data: existingPk, error: existingPkErr } = await supabase
             .from("supers")
             .select("super_id")
-            .eq("public_key", public_key)
+            .eq("public_key", String(public_key).trim())
             .maybeSingle();
-         if (existing) {
+         if (existingPkErr) throw existingPkErr;
+         if (existingPk) {
             results.push({ ok: false, public_key, error: "Public key already used" });
             continue;
          }
@@ -402,10 +406,12 @@ router.post("/batch", authenticateUser, async (req, res) => {
          let finalSuperCode = null;
          let claimedAvailableId = null;
 
+         // try claim label code from available_public_keys
          const { data: avail, error: availErr } = await supabase
             .from("available_public_keys")
-            .select("id, code")
-            .eq("public_key", public_key)
+            .select("id, code, owner_user_id")
+            .eq("public_key", String(public_key).trim())
+            .eq("owner_user_id", owner_user_id)
             .maybeSingle();
          if (availErr) throw availErr;
 
@@ -414,30 +420,57 @@ router.post("/batch", authenticateUser, async (req, res) => {
             claimedAvailableId = avail.id;
          }
 
+         // if no code from labels pack -> generate sequential PER OWNER
          if (!finalSuperCode) {
             finalSuperCode = "01-01";
+
             const { data: lastSuper, error: lastErr } = await supabase
                .from("supers")
                .select("super_code")
+               .eq("owner_user_id", owner_user_id)
                .order("created_at", { ascending: false })
                .limit(1)
                .maybeSingle();
             if (lastErr) throw lastErr;
 
             if (lastSuper?.super_code) {
-               const [prefix, suffix] = lastSuper.super_code.split("-").map(Number);
-               let newSuffix = (Number.isFinite(suffix) ? suffix : 0) + 1;
-               let newPrefix = Number.isFinite(prefix) ? prefix : 1;
-               if (newSuffix > 99) {
-                  newSuffix = 1;
-                  newPrefix += 1;
+               const [prefixStr, suffixStr] = String(lastSuper.super_code).split("-");
+               let prefix = Number(prefixStr) || 1;
+               let suffix = Number(suffixStr) || 0;
+
+               suffix += 1;
+               if (suffix > 99) {
+                  suffix = 1;
+                  prefix += 1;
                }
-               finalSuperCode = `${String(newPrefix).padStart(2, "0")}-${String(newSuffix).padStart(
+
+               finalSuperCode = `${String(prefix).padStart(2, "0")}-${String(suffix).padStart(
                   2,
-                  "0"
+                  "0",
                )}`;
             }
          }
+
+         // super_code must be unique PER OWNER
+         const { data: codeHit, error: codeErr } = await supabase
+            .from("supers")
+            .select("super_id")
+            .eq("owner_user_id", owner_user_id)
+            .eq("super_code", finalSuperCode)
+            .maybeSingle();
+         if (codeErr) throw codeErr;
+
+         if (codeHit) {
+            results.push({
+               ok: false,
+               public_key,
+               error: "Super code already exists for this user",
+            });
+            continue;
+         }
+
+         // Insert
+         const finalPublicKey = String(public_key).trim();
 
          const { data: created, error: insErr } = await supabase
             .from("supers")
@@ -451,7 +484,7 @@ router.post("/batch", authenticateUser, async (req, res) => {
                   active: finalActive,
                   service_in: finalServiceIn,
                   hive_id: null,
-                  public_key,
+                  public_key: finalPublicKey,
                   owner_user_id,
                },
             ])
@@ -459,6 +492,7 @@ router.post("/batch", authenticateUser, async (req, res) => {
             .single();
          if (insErr) throw insErr;
 
+         // delete claim row if it existed
          if (claimedAvailableId) {
             const { error: delErr } = await supabase
                .from("available_public_keys")
@@ -495,6 +529,10 @@ router.post("/batch", authenticateUser, async (req, res) => {
  * =========================================================
  * ✅ 8) POST /  (create single)
  * =========================================================
+ * Fixes:
+ * - uniqueness check is now correct:
+ *    - public_key is global unique
+ *    - super_code is unique per owner_user_id
  */
 router.post("/", authenticateUser, async (req, res) => {
    const {
@@ -520,6 +558,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
       // 1) If public_key provided -> validate + claim label code
       if (finalPublicKey) {
+         // global unique public_key
          const { data: existing, error: existingErr } = await supabase
             .from("supers")
             .select("super_id")
@@ -551,6 +590,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
       // 2) If no code -> generate sequential per user
       if (!finalSuperCode) {
+         // manual/no-QR supers still get a public_key so deep links work
          if (!finalPublicKey) finalPublicKey = uuidv4();
 
          const { data: lastSuper, error: lastErr } = await supabase
@@ -563,7 +603,7 @@ router.post("/", authenticateUser, async (req, res) => {
          if (lastErr) throw lastErr;
 
          if (lastSuper?.super_code) {
-            const [prefixStr, suffixStr] = lastSuper.super_code.split("-");
+            const [prefixStr, suffixStr] = String(lastSuper.super_code).split("-");
             let prefix = Number(prefixStr) || 1;
             let suffix = Number(suffixStr) || 0;
 
@@ -573,24 +613,35 @@ router.post("/", authenticateUser, async (req, res) => {
                prefix += 1;
             }
 
-            finalSuperCode = `${String(prefix).padStart(2, "0")}-${String(suffix).padStart(
-               2,
-               "0"
-            )}`;
+            finalSuperCode = `${String(prefix).padStart(2, "0")}-${String(suffix).padStart(2, "0")}`;
          } else {
             finalSuperCode = "01-01";
          }
       }
 
-      // 3) Uniqueness safety
-      const { data: already, error: alreadyErr } = await supabase
+      // ---- Optional debug (keep while testing) ----
+      console.log("🧪 CREATE SUPER CHECK", { owner_user_id, finalSuperCode, finalPublicKey });
+
+      // 3) Uniqueness safety (FIXED)
+      // (A) public_key global unique
+      const { data: pkHit, error: pkErr } = await supabase
          .from("supers")
          .select("super_id")
-         .or(`super_code.eq.${finalSuperCode},public_key.eq.${finalPublicKey}`)
+         .eq("public_key", finalPublicKey)
          .maybeSingle();
-      if (alreadyErr) throw alreadyErr;
-      if (already)
-         return res.status(400).json({ error: "Super code or public key already exists" });
+      if (pkErr) throw pkErr;
+      if (pkHit) return res.status(400).json({ error: "Public key already used" });
+
+      // (B) super_code unique per owner_user_id
+      const { data: codeHit, error: codeErr } = await supabase
+         .from("supers")
+         .select("super_id")
+         .eq("owner_user_id", owner_user_id)
+         .eq("super_code", finalSuperCode)
+         .maybeSingle();
+      if (codeErr) throw codeErr;
+      if (codeHit)
+         return res.status(400).json({ error: "Super code already exists for this user" });
 
       // 4) Resolve type + tare
       let finalTypeText = (super_type || "").trim();
