@@ -12,21 +12,80 @@ function getOpaliteColorFromSeason(season) {
    if (!season) return null;
    const lastDigit = Number(String(season).slice(-1));
 
-   // 1 or 6 → white
    if (lastDigit === 1 || lastDigit === 6) return "white";
-   // 2 or 7 → yellow
    if (lastDigit === 2 || lastDigit === 7) return "yellow";
-   // 3 or 8 → red
    if (lastDigit === 3 || lastDigit === 8) return "red";
-   // 4 or 9 → green
    if (lastDigit === 4 || lastDigit === 9) return "green";
-   // 5 or 0 → blue
    if (lastDigit === 5 || lastDigit === 0) return "blue";
 
    return null;
 }
 
-// 👑 إنشاء ملكة جديدة
+// ✅ Generate next queen code per user (safe, no count)
+async function generateNextQueenCodeForUser(userId) {
+   const { data: last, error: lastErr } = await supabase
+      .from("queens")
+      .select("queen_code")
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+   if (lastErr) throw lastErr;
+
+   if (!last?.queen_code) return "Q-001";
+
+   const m = String(last.queen_code).match(/^Q-(\d{3,})$/);
+   const n = m ? parseInt(m[1], 10) : 0;
+
+   return `Q-${String(n + 1).padStart(3, "0")}`;
+}
+
+// ✅ Retry-safe insert (handles rare race conditions)
+async function insertQueenWithRetry({ userId, queenRowBase, maxAttempts = 3 }) {
+   let lastError = null;
+
+   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const queenCode = await generateNextQueenCodeForUser(userId);
+      const publicKey = uuidv4();
+
+      const row = {
+         ...queenRowBase,
+         owner_user_id: userId,
+         queen_code: queenCode,
+         public_key: publicKey,
+      };
+
+      const { data, error } = await supabase.from("queens").insert([row]).select().single();
+
+      if (!error) return data;
+
+      lastError = error;
+
+      // If unique violation on (owner_user_id, queen_code) → retry
+      // Supabase/Postgres usually uses code "23505" for unique_violation
+      const pgCode = error?.code;
+      const msg = String(error?.message || "").toLowerCase();
+
+      const isUniqueConflict =
+         pgCode === "23505" ||
+         msg.includes("duplicate key") ||
+         msg.includes("unique") ||
+         msg.includes("queens_owner_queen_code_key");
+
+      if (!isUniqueConflict) break;
+   }
+
+   throw lastError || new Error("Failed to create queen");
+}
+
+/**
+ * =========================================================
+ * 👑 إنشاء ملكة جديدة
+ * POST /queens
+ * body: { grafting_date, strain_name, opalite_color, expected_traits, hive_id, forceReplace? }
+ * =========================================================
+ */
 router.post("/", authenticateUser, async (req, res) => {
    const {
       grafting_date,
@@ -37,16 +96,16 @@ router.post("/", authenticateUser, async (req, res) => {
       forceReplace = false,
    } = req.body;
 
-   const userId = req.user.id; // 👈 المالك الحقيقي للملكة
+   const userId = req.user.id;
 
    try {
       if (hive_id) {
-         // نتأكد أن هذه الخلية ليس لها ملكة لهذا المستخدم
+         // Check if hive already has a queen for this user
          const { data: existingQueen, error: checkError } = await supabase
             .from("queens")
             .select("queen_id")
             .eq("hive_id", hive_id)
-            .eq("owner_user_id", userId) // 👈 مهم جداً
+            .eq("owner_user_id", userId)
             .limit(1)
             .maybeSingle();
 
@@ -58,73 +117,49 @@ router.post("/", authenticateUser, async (req, res) => {
          if (existingQueen) {
             if (!forceReplace) {
                return res.status(400).json({ error: "This hive already has a queen linked." });
-            } else {
-               // ✅ Unlink old queen (الخاصة بنفس المستخدم فقط)
-               const { error: unlinkError } = await supabase
-                  .from("queens")
-                  .update({ hive_id: null })
-                  .eq("queen_id", existingQueen.queen_id)
-                  .eq("owner_user_id", userId);
+            }
 
-               if (unlinkError) {
-                  console.error("Error unlinking old queen:", unlinkError);
-                  return res.status(500).json({ error: "Failed to replace existing queen." });
-               }
+            // Unlink old queen (same user only)
+            const { error: unlinkError } = await supabase
+               .from("queens")
+               .update({ hive_id: null })
+               .eq("queen_id", existingQueen.queen_id)
+               .eq("owner_user_id", userId);
+
+            if (unlinkError) {
+               console.error("Error unlinking old queen:", unlinkError);
+               return res.status(500).json({ error: "Failed to replace existing queen." });
             }
          }
       }
 
-      // ✅ Create new queen
-      // نخلي الكود Q-001, Q-002 ... لكل مستخدم لوحده
-      const { data: allQueens, error: countError } = await supabase
-         .from("queens")
-         .select("queen_id")
-         .eq("owner_user_id", userId);
+      const queenRowBase = {
+         grafting_date,
+         strain_name,
+         opalite_color,
+         expected_traits,
+         hive_id: hive_id || null,
+      };
 
-      if (countError) {
-         console.error("Error counting queens:", countError);
-         return res.status(500).json({ error: "Failed to generate queen code" });
-      }
-
-      const count = allQueens?.length || 0;
-      const queenCode = `Q-${String(count + 1).padStart(3, "0")}`;
-      const publicKey = uuidv4();
-
-      const { data, error } = await supabase
-         .from("queens")
-         .insert([
-            {
-               queen_code: queenCode,
-               public_key: publicKey,
-               grafting_date,
-               strain_name,
-               opalite_color,
-               expected_traits,
-               hive_id,
-               owner_user_id: userId, // 👈 ربط الملكة بالمستخدم
-            },
-         ])
-         .select();
-
-      if (error) {
-         console.error("Insert error:", error);
-         return res.status(400).json({ error: error.message });
-      }
+      const created = await insertQueenWithRetry({ userId, queenRowBase, maxAttempts: 3 });
 
       return res.status(201).json({
          message: "Queen created successfully",
-         queen: data[0],
+         queen: created,
       });
    } catch (err) {
       console.error("Unexpected error in POST /queens:", err);
-      res.status(500).json({ error: "Unexpected server error" });
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// 👑 Create a queen from a grafted cell QR
-// body: { hive_id, qr_payload, forceReplace? }
-// 👑 Create a queen from a grafted cell QR
-// body: { hive_id, qr_payload, forceReplace? }
+/**
+ * =========================================================
+ * 👑 Create a queen from a grafted cell QR
+ * POST /queens/from-cell
+ * body: { hive_id, qr_payload, forceReplace? }
+ * =========================================================
+ */
 router.post("/from-cell", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { hive_id, qr_payload, forceReplace = false } = req.body;
@@ -134,31 +169,27 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
    }
 
    try {
-      // 1️⃣ Parse QR payload
-      let data;
+      // 1) Parse QR payload
+      let payload;
       try {
-         data = typeof qr_payload === "string" ? JSON.parse(qr_payload) : qr_payload;
+         payload = typeof qr_payload === "string" ? JSON.parse(qr_payload) : qr_payload;
       } catch (e) {
          console.error("Invalid QR payload:", e);
          return res.status(400).json({ error: "Invalid QR payload JSON" });
       }
 
-      console.log("👑 /queens/from-cell QR payload:", data);
+      const sourceType = payload.type || "queen_cell";
+      const cellLot = payload.cell_lot || payload.full_lot_number || payload.full_lot || null;
+      const strainName = payload.strain || payload.strain_name || null;
+      const graftingDate = payload.graft_date || null;
 
-      const sourceType = data.type || "queen_cell"; // e.g. 'queen_cell'
-      const cellLot = data.cell_lot || data.full_lot_number || data.full_lot || null; // be tolerant
-      const strainName = data.strain || data.strain_name || null;
-      const graftingDate = data.graft_date || null;
+      const parents = payload.parents || null;
+      const grandparents = payload.grandparents || null;
 
-      // 🧬 NEW: parents / grandparents from QR
-      const parents = data.parents || null;
-      const grandparents = data.grandparents || null;
-
-      // 🔹 Derive season and opalite color
-      const season = data.season || (graftingDate ? new Date(graftingDate).getFullYear() : null);
+      const season = payload.season || (graftingDate ? new Date(graftingDate).getFullYear() : null);
       const opaliteColor = getOpaliteColorFromSeason(season);
 
-      // 2️⃣ Check if this hive already has a queen for this user
+      // 2) Check if hive already has a queen for this user
       const { data: existingQueen, error: checkError } = await supabase
          .from("queens")
          .select("queen_id")
@@ -177,66 +208,35 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
             return res
                .status(400)
                .json({ error: "This hive already has a queen linked. Use forceReplace." });
-         } else {
-            const { error: unlinkError } = await supabase
-               .from("queens")
-               .update({ hive_id: null })
-               .eq("queen_id", existingQueen.queen_id)
-               .eq("owner_user_id", userId);
+         }
 
-            if (unlinkError) {
-               console.error("Error unlinking old queen:", unlinkError);
-               return res.status(500).json({ error: "Failed to replace existing queen." });
-            }
+         const { error: unlinkError } = await supabase
+            .from("queens")
+            .update({ hive_id: null })
+            .eq("queen_id", existingQueen.queen_id)
+            .eq("owner_user_id", userId);
+
+         if (unlinkError) {
+            console.error("Error unlinking old queen:", unlinkError);
+            return res.status(500).json({ error: "Failed to replace existing queen." });
          }
       }
 
-      // 3️⃣ Generate queen_code like before (Q-001, Q-002...) per user
-      const { data: allQueens, error: countError } = await supabase
-         .from("queens")
-         .select("queen_id")
-         .eq("owner_user_id", userId);
+      // 3) Insert with retry-safe code generation
+      const queenRowBase = {
+         grafting_date: graftingDate,
+         strain_name: strainName,
+         opalite_color: opaliteColor,
+         expected_traits: null,
+         hive_id,
+         source_type: sourceType,
+         source_cell_lot: cellLot,
+         source_cell_id: null,
+         parents,
+         grandparents,
+      };
 
-      if (countError) {
-         console.error("Error counting queens:", countError);
-         return res.status(500).json({ error: "Failed to generate queen code" });
-      }
-
-      const count = allQueens?.length || 0;
-      const queenCode = `Q-${String(count + 1).padStart(3, "0")}`;
-      const publicKey = uuidv4();
-
-      // 4️⃣ Create queen row linked to hive + graft cell info
-      const { data: created, error: insertError } = await supabase
-         .from("queens")
-         .insert([
-            {
-               queen_code: queenCode,
-               public_key: publicKey,
-               grafting_date: graftingDate,
-               strain_name: strainName,
-               opalite_color: opaliteColor, // 🔹 auto-filled from season
-               expected_traits: null,
-               hive_id,
-               owner_user_id: userId,
-               source_type: sourceType, // 👈 linked to graft system
-               source_cell_lot: cellLot, // 👈 safe link to graft line
-               source_cell_id: null,
-
-               // 🧬 NEW: store pedigree text directly on queen
-               parents,
-               grandparents,
-            },
-         ])
-         .select()
-         .single();
-
-      if (insertError) {
-         console.error("Insert error:", insertError);
-         return res.status(400).json({ error: insertError.message });
-      }
-
-      console.log("✅ Queen created from cell:", created);
+      const created = await insertQueenWithRetry({ userId, queenRowBase, maxAttempts: 3 });
 
       return res.status(201).json({
          message: "Queen created from cell successfully",
@@ -244,12 +244,16 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
       });
    } catch (err) {
       console.error("Unexpected error in POST /queens/from-cell:", err);
-      res.status(500).json({ error: "Unexpected server error" });
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// 🔍 Get current queen for a hive
-// GET /queens/by-hive/:hive_id
+/**
+ * =========================================================
+ * 🔍 Get current queen for a hive
+ * GET /queens/by-hive/:hive_id
+ * =========================================================
+ */
 router.get("/by-hive/:hive_id", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const hiveId = parseInt(req.params.hive_id, 10);
@@ -274,19 +278,19 @@ router.get("/by-hive/:hive_id", authenticateUser, async (req, res) => {
          return res.status(500).json({ error: "Failed to fetch queen for hive" });
       }
 
-      if (!data) {
-         return res.status(200).json({ queen: null });
-      }
-
-      return res.status(200).json({ queen: data });
+      return res.status(200).json({ queen: data || null });
    } catch (err) {
       console.error("Unexpected error in GET /queens/by-hive:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// 🖼️ تحميل صورة QR لملكة
-// هذا المسار ممكن يظل عام لأنه فقط لطباعة اللاصق
+/**
+ * =========================================================
+ * 🖼️ QR download (public for printing)
+ * GET /queens/qr-download/:public_key
+ * =========================================================
+ */
 router.get("/qr-download/:public_key", async (req, res) => {
    const { public_key } = req.params;
 
@@ -315,7 +319,7 @@ router.get("/qr-download/:public_key", async (req, res) => {
       ctx.fillStyle = "#000";
       ctx.font = "bold 20px Arial";
       ctx.textAlign = "center";
-      ctx.fillText(`Reine: ${queen.queen_code}`, 150, 300); // لو حاب تغير النص
+      ctx.fillText(`Reine: ${queen.queen_code}`, 150, 300);
       ctx.font = "16px Arial";
       ctx.fillText(queen.strain_name || "", 150, 340);
 
@@ -325,11 +329,16 @@ router.get("/qr-download/:public_key", async (req, res) => {
       res.send(buffer);
    } catch (err) {
       console.error(err);
-      res.status(500).json({ error: "❌ Failed to generate QR image" });
+      return res.status(500).json({ error: "❌ Failed to generate QR image" });
    }
 });
 
-// 📋 عرض جميع الملكات
+/**
+ * =========================================================
+ * 📋 List my queens
+ * GET /queens
+ * =========================================================
+ */
 router.get("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
 
@@ -337,18 +346,23 @@ router.get("/", authenticateUser, async (req, res) => {
       const { data, error } = await supabase
          .from("queens")
          .select("*")
-         .eq("owner_user_id", userId) // 👈 فقط ملكاتي
+         .eq("owner_user_id", userId)
          .order("created_at", { ascending: false });
 
       if (error) return res.status(400).json({ error: error.message });
-      res.status(200).json({ queens: data });
+      return res.status(200).json({ queens: data || [] });
    } catch (err) {
       console.error(err);
-      res.status(500).json({ error: "Unexpected server error" });
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// 🔍 جلب ملكة واحدة بالتفصيل
+/**
+ * =========================================================
+ * 🔍 Get one queen
+ * GET /queens/:queen_id
+ * =========================================================
+ */
 router.get("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
    const userId = req.user.id;
@@ -358,7 +372,7 @@ router.get("/:queen_id", authenticateUser, async (req, res) => {
          .from("queens")
          .select("*")
          .eq("queen_id", queen_id)
-         .eq("owner_user_id", userId) // 👈 تأمين
+         .eq("owner_user_id", userId)
          .single();
 
       if (error || !data) {
@@ -372,7 +386,12 @@ router.get("/:queen_id", authenticateUser, async (req, res) => {
    }
 });
 
-// ✏️ تحديث ملكة
+/**
+ * =========================================================
+ * ✏️ Update queen
+ * PATCH /queens/:queen_id
+ * =========================================================
+ */
 router.patch("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
    const updateFields = req.body;
@@ -383,22 +402,26 @@ router.patch("/:queen_id", authenticateUser, async (req, res) => {
          .from("queens")
          .update(updateFields)
          .eq("queen_id", queen_id)
-         .eq("owner_user_id", userId) // 👈 لا يمكن التعديل على ملكة شخص آخر
-         .select();
+         .eq("owner_user_id", userId)
+         .select()
+         .single();
 
       if (error) return res.status(400).json({ error: error.message });
-      if (!data || !data[0]) {
-         return res.status(404).json({ error: "Queen not found" });
-      }
+      if (!data) return res.status(404).json({ error: "Queen not found" });
 
-      res.status(200).json({ message: "✅ Queen updated successfully", queen: data[0] });
+      return res.status(200).json({ message: "✅ Queen updated successfully", queen: data });
    } catch (err) {
       console.error(err);
-      res.status(500).json({ error: "Unexpected server error" });
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
-// ❌ حذف ملكة
+/**
+ * =========================================================
+ * ❌ Delete queen
+ * DELETE /queens/:queen_id
+ * =========================================================
+ */
 router.delete("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
    const userId = req.user.id;
@@ -408,17 +431,17 @@ router.delete("/:queen_id", authenticateUser, async (req, res) => {
          .from("queens")
          .delete()
          .eq("queen_id", queen_id)
-         .eq("owner_user_id", userId); // 👈 لا يمكن حذف ملكة غيرك
+         .eq("owner_user_id", userId);
 
       if (error) {
          console.error("Error deleting queen:", error);
          return res.status(400).json({ error: "Failed to delete queen" });
       }
 
-      res.status(200).json({ message: "✅ Queen deleted successfully" });
+      return res.status(200).json({ message: "✅ Queen deleted successfully" });
    } catch (err) {
       console.error("Unexpected error deleting queen:", err);
-      res.status(500).json({ error: "Unexpected server error" });
+      return res.status(500).json({ error: "Unexpected server error" });
    }
 });
 
