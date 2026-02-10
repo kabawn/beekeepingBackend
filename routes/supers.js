@@ -97,7 +97,6 @@ router.get("/my/stats", authenticateUser, async (req, res) => {
          active_total = data.filter((s) => s.active).length;
       }
 
-      console.log("🧠 supers stats ms =", Date.now() - t0);
       return res.json({ total, active_total });
    } catch (err) {
       console.error("❌ supers stats error:", err);
@@ -122,10 +121,7 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
          .eq("owner_user_id", userId)
          .maybeSingle();
 
-      console.log("🧪 Incoming code:", super_code);
-      console.log("🧪 User ID:", userId);
-      console.log("🧪 Supabase result:", data);
-      console.log("🧪 Supabase error:", error);
+     
 
       if (error || !data) {
          return res.status(404).json({ error: "Super not found or not owned by user" });
@@ -620,7 +616,6 @@ router.post("/", authenticateUser, async (req, res) => {
       }
 
       // ---- Optional debug (keep while testing) ----
-      console.log("🧪 CREATE SUPER CHECK", { owner_user_id, finalSuperCode, finalPublicKey });
 
       // 3) Uniqueness safety (FIXED)
       // (A) public_key global unique
@@ -691,13 +686,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
       if (error) throw error;
 
-      console.log("✅ Super created:", {
-         super_code: finalSuperCode,
-         public_key: finalPublicKey,
-         owner_user_id,
-         super_type: finalTypeText,
-         weight_empty: finalWeightEmptyKg,
-      });
+      
 
       return res.status(201).json(data);
    } catch (err) {
