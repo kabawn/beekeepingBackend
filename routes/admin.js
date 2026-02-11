@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const supabase = require("../utils/supabaseClient");
+const supabase = require("../utils/supabaseAdmin");
 
 const authenticateUser = require("../middlewares/authMiddleware");
 const requireAdmin = require("../middlewares/requireAdmin");
@@ -110,63 +110,61 @@ router.get("/stats", async (req, res) => {
    try {
       const { DateTime } = require("luxon");
 
-      // ✅ France timezone
       const startOfTodayParis = DateTime.now().setZone("Europe/Paris").startOf("day").toISO();
-
       const sevenDaysAgoParis = DateTime.now().setZone("Europe/Paris").minus({ days: 7 }).toISO();
 
       const [
          totalUsers,
          newUsersToday,
          newUsers7d,
-         totalApiaries, // ✅ NEW
-         apiariesToday, // ✅ NEW
+         totalApiaries,
+         apiariesToday,
          totalHives,
          totalInspections,
       ] = await Promise.all([
-         // Total Users
-         supabase.from("user_profiles").select("*", { count: "exact", head: true }),
-
-         // New Users Today
+         supabase.from("user_profiles").select("user_id", { count: "exact", head: true }),
          supabase
             .from("user_profiles")
-            .select("*", { count: "exact", head: true })
+            .select("user_id", { count: "exact", head: true })
             .gte("created_at", startOfTodayParis),
-
-         // New Users Last 7 Days
          supabase
             .from("user_profiles")
-            .select("*", { count: "exact", head: true })
+            .select("user_id", { count: "exact", head: true })
             .gte("created_at", sevenDaysAgoParis),
 
-         // ✅ Total Apiaries
-         supabase.from("apiaries").select("*", { count: "exact", head: true }),
-
-         // ✅ Apiaries Created Today
+         // ✅ use a real column (and catch errors)
+         supabase.from("apiaries").select("apiary_id", { count: "exact", head: true }),
          supabase
             .from("apiaries")
-            .select("*", { count: "exact", head: true })
+            .select("apiary_id", { count: "exact", head: true })
             .gte("created_at", startOfTodayParis),
 
-         // Total Hives
          supabase.from("hives").select("*", { count: "exact", head: true }),
-
-         // Total Inspections
          supabase.from("hive_inspections").select("*", { count: "exact", head: true }),
       ]);
+
+      // ✅ HARD FAIL on any error (so you don't get fake zeros)
+      const err =
+         totalUsers.error ||
+         newUsersToday.error ||
+         newUsers7d.error ||
+         totalApiaries.error ||
+         apiariesToday.error ||
+         totalHives.error ||
+         totalInspections.error;
+
+      if (err) {
+         return res.status(500).json({ error: err.message || "Supabase query failed" });
+      }
 
       return res.json({
          users: totalUsers.count || 0,
          new_users_today: newUsersToday.count || 0,
          new_users_7d: newUsers7d.count || 0,
-
-         // ✅ NEW
          apiaries: totalApiaries.count || 0,
          apiaries_today: apiariesToday.count || 0,
-
          hives: totalHives.count || 0,
          inspections: totalInspections.count || 0,
-
          updatedAt: new Date().toISOString(),
          timezone: "Europe/Paris",
       });
