@@ -120,22 +120,31 @@ async function assertApiaryOwnership(apiaryId, userId) {
 }
 
 // ✅ Get hive only if it belongs to current user (via apiary owner)
+// ✅ Get hive only if it belongs to current user (NO JOIN - reliable)
 async function getHiveIfOwnedByUser(hiveId, userId, select = "*") {
-   const { data, error } = await supabase
+   // 1) Fetch hive
+   const { data: hive, error: hiveErr } = await supabase
       .from("hives")
-      .select(
-         `
-         ${select},
-         apiaries!inner(owner_user_id, apiary_name, company_id)
-       `,
-      )
+      .select(`${select}, apiary_id`)
       .eq("hive_id", hiveId)
-      .eq("apiaries.owner_user_id", userId)
       .maybeSingle();
 
-   if (error) return { ok: false, error: error.message };
-   if (!data) return { ok: false, error: "Hive not found" };
-   return { ok: true, hive: data };
+   if (hiveErr) return { ok: false, error: hiveErr.message };
+   if (!hive) return { ok: false, error: "Hive not found" };
+
+   // 2) Check apiary ownership
+   const { data: apiary, error: apErr } = await supabase
+      .from("apiaries")
+      .select("apiary_id, owner_user_id, apiary_name, company_id")
+      .eq("apiary_id", hive.apiary_id)
+      .eq("owner_user_id", userId)
+      .maybeSingle();
+
+   if (apErr) return { ok: false, error: apErr.message };
+   if (!apiary) return { ok: false, error: "Forbidden" };
+
+   // keep same shape expected by existing code
+   return { ok: true, hive: { ...hive, apiaries: apiary } };
 }
 
 // ✅ Get hive by code only if owned
@@ -501,6 +510,7 @@ router.patch("/:id/reassign", authenticateUser, async (req, res) => {
 // ✅ GET hive by ID (🔒 ownership protected)
 // ✅ GET hive by ID (🔒 ownership protected) + logs on failure
 // ✅ GET hive by ID (🔒 ownership protected) + DIAGNOSTIC LOGS (on 404/500 only)
+// ✅ GET hive by ID (🔒 ownership protected) — FULL ROUTE
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
    const userId = req.user?.id;
@@ -513,27 +523,29 @@ router.get("/:id", authenticateUser, async (req, res) => {
    try {
       const owned = await getHiveIfOwnedByUser(id, userId, "*");
 
+      // ❌ Not OK => decide status
       if (!owned.ok) {
-         console.warn("[HIVES:GET:NOT_FOUND_OR_FORBIDDEN]", {
+         const isForbidden = owned.error === "Forbidden";
+         const status = isForbidden ? 403 : 404;
+
+         console.warn("[HIVES:GET:FAILED]", {
             traceId,
             path: req.originalUrl,
             method: req.method,
             id,
             userId,
+            status,
+            reason: owned.error,
             hasAuthHeader: !!req.headers.authorization,
-            tokenSource: req.headers.authorization?.startsWith("Bearer ")
-               ? "authorization_header"
-               : req.query?.access_token
-                 ? "query_access_token"
-                 : "unknown",
             ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress,
+            ua: req.headers["user-agent"],
             time: new Date().toISOString(),
-            details: owned.error || null,
          });
 
-         return res.status(404).json({ error: "Hive not found" });
+         return res.status(status).json({ error: owned.error });
       }
 
+      // ✅ Success
       const { apiaries, ...cleanHive } = owned.hive;
       return res.status(200).json(cleanHive);
    } catch (err) {
