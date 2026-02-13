@@ -357,6 +357,30 @@ router.get("/", authenticateUser, async (req, res) => {
    }
 });
 
+// 🔍 Get one queen by queen_code
+// GET /queens/code/:queen_code
+router.get("/code/:queen_code", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const queenCode = String(req.params.queen_code || "").trim();
+
+   try {
+      const { data, error } = await supabase
+         .from("queens")
+         .select("*")
+         .eq("owner_user_id", userId)
+         .eq("queen_code", queenCode)
+         .maybeSingle();
+
+      if (error) return res.status(500).json({ error: "Failed to fetch queen" });
+      if (!data) return res.status(404).json({ error: "Queen not found" });
+
+      return res.status(200).json({ queen: data });
+   } catch (err) {
+      console.error("GET /queens/code error:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 /**
  * =========================================================
  * 🔍 Get one queen
