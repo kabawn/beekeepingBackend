@@ -197,117 +197,148 @@ async function getHiveByPublicKeyIfOwned(
  * -----------------------------
  */
 router.post("/", authenticateUser, async (req, res) => {
-   const userId = req.user.id;
+  const userId = req.user.id;
 
-   const {
-      hive_type,
-      hive_purpose,
-      empty_weight,
-      frame_capacity,
-      apiary_id,
-      public_key, // optional
-   } = req.body;
+  const {
+    hive_type,
+    hive_purpose,
+    empty_weight,
+    frame_capacity,
+    apiary_id,
+    public_key,
+  } = req.body;
 
-   if (!apiary_id) return res.status(400).json({ error: "apiary_id is required." });
+  // ✅ 1) apiary_id required
+  if (!apiary_id) {
+    return res.status(400).json({ error: "apiary_id is required." });
+  }
 
-   try {
-      // ✅ 1) SECURITY: apiary must belong to this user
-      const { data: apiary, error: apiaryErr } = await supabase
-         .from("apiaries")
-         .select("apiary_id, owner_user_id")
-         .eq("apiary_id", apiary_id)
-         .maybeSingle();
+  try {
+    // ✅ 2) FIX: force apiary_id to number (prevents random 403)
+    const apiaryIdNum = Number(apiary_id);
 
-      if (apiaryErr) return res.status(400).json({ error: apiaryErr.message });
-      if (!apiary || apiary.owner_user_id !== userId) {
-         return res.status(403).json({ error: "You don't have access to this apiary." });
+    if (!Number.isFinite(apiaryIdNum)) {
+      return res.status(400).json({
+        error: "apiary_id must be a number",
+        debug: { received_apiary_id: apiary_id, type: typeof apiary_id },
+      });
+    }
+
+    // ✅ 3) fetch apiary
+    const { data: apiary, error: apiaryErr } = await supabase
+      .from("apiaries")
+      .select("apiary_id, owner_user_id")
+      .eq("apiary_id", apiaryIdNum)
+      .maybeSingle();
+
+    if (apiaryErr) {
+      return res.status(400).json({ error: apiaryErr.message });
+    }
+
+    if (!apiary) {
+      return res.status(403).json({
+        error: "You don't have access to this apiary.",
+        debug: { reason: "APIARY_NOT_FOUND", userId, apiaryIdNum },
+      });
+    }
+
+    if (String(apiary.owner_user_id) !== String(userId)) {
+      return res.status(403).json({
+        error: "You don't have access to this apiary.",
+        debug: {
+          reason: "NOT_OWNER",
+          userId,
+          apiaryOwner: apiary.owner_user_id,
+          apiaryIdNum,
+        },
+      });
+    }
+
+    // ✅ 4) generate public key
+    const finalPublicKey =
+      (public_key?.trim().toLowerCase() || uuidv4()).toLowerCase();
+
+    let hive_code = null;
+
+    // ---- CASE A: QR provided ----
+    if (public_key) {
+      const { data: existingHive, error: existErr } = await supabase
+        .from("hives")
+        .select("hive_id")
+        .eq("public_key", finalPublicKey)
+        .maybeSingle();
+
+      if (existErr) return res.status(400).json({ error: existErr.message });
+      if (existingHive)
+        return res.status(400).json({ error: "Public key already used" });
+
+      const { data: available, error: availableErr } = await supabase
+        .from("available_public_keys")
+        .select("public_key, code")
+        .eq("public_key", finalPublicKey)
+        .eq("owner_user_id", userId)
+        .maybeSingle();
+
+      if (availableErr)
+        return res.status(400).json({ error: availableErr.message });
+
+      if (!available) {
+        return res.status(400).json({
+          error: "Public key not found in your available keys",
+        });
       }
 
-      // ✅ 2) final public_key
-      const finalPublicKey = (public_key?.trim().toLowerCase() || uuidv4()).toLowerCase();
+      hive_code = available.code;
+    }
 
-      // ✅ 3) Decide hive_code based on whether user has QR ready or not
-      let hive_code = null;
+    // ---- CASE B: auto generate code ----
+    if (!public_key) {
+      hive_code = await generateNextHiveCodeForUser(userId);
+    }
 
-      // ---- CASE A: user provided public_key (QR جاهز) ----
-      if (public_key) {
-         // (A1) ensure not already used by any hive
-         const { data: existingHive, error: existErr } = await supabase
-            .from("hives")
-            .select("hive_id")
-            .eq("public_key", finalPublicKey)
-            .maybeSingle();
+    const qr_code = `https://yourapp.com/hive/${finalPublicKey}`;
 
-         if (existErr) return res.status(400).json({ error: existErr.message });
-         if (existingHive) return res.status(400).json({ error: "Public key already used" });
+    // ✅ 5) INSERT
+    const { data: hive, error } = await supabase
+      .from("hives")
+      .insert([
+        {
+          hive_code,
+          hive_type,
+          hive_purpose,
+          empty_weight,
+          frame_capacity,
+          public_key: finalPublicKey,
+          qr_code,
+          apiary_id: apiaryIdNum, // 🔥 important
+        },
+      ])
+      .select()
+      .single();
 
-         // (A2) fetch fixed code from available_public_keys for THIS user
-         const { data: available, error: availableErr } = await supabase
-            .from("available_public_keys")
-            .select("public_key, code")
-            .eq("public_key", finalPublicKey)
-            .eq("owner_user_id", userId)
-            .maybeSingle();
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
 
-         if (availableErr) return res.status(400).json({ error: availableErr.message });
-         if (!available) {
-            return res.status(400).json({ error: "Public key not found in your available keys" });
-         }
+    // ✅ 6) remove used QR
+    if (public_key) {
+      await supabase
+        .from("available_public_keys")
+        .delete()
+        .eq("public_key", finalPublicKey)
+        .eq("owner_user_id", userId);
+    }
 
-         // ✅ IMPORTANT: keep the code as-is (fixed)
-         hive_code = available.code;
-      }
-
-      // ---- CASE B: no public_key => auto-generate NN-NN ----
-      if (!public_key) {
-         hive_code = await generateNextHiveCodeForUser(userId);
-      }
-
-      const qr_code = `https://yourapp.com/hive/${finalPublicKey}`;
-
-      // ✅ 4) insert hive
-      const { data: hive, error } = await supabase
-         .from("hives")
-         .insert([
-            {
-               hive_code,
-               hive_type,
-               hive_purpose,
-               empty_weight,
-               frame_capacity,
-               public_key: finalPublicKey,
-               qr_code,
-               apiary_id,
-            },
-         ])
-         .select()
-         .single();
-
-      if (error) {
-         if (String(error.message || "").includes("HIVE_CODE_LIMIT_REACHED")) {
-            return res.status(400).json({ error: "Hive code limit reached (99-99)." });
-         }
-         return res.status(400).json({ error: error.message });
-      }
-
-      // ✅ 5) if QR key was used, delete it from available_public_keys (after success)
-      if (public_key) {
-         await supabase
-            .from("available_public_keys")
-            .delete()
-            .eq("public_key", finalPublicKey)
-            .eq("owner_user_id", userId);
-      }
-
-      return res.status(201).json({ message: "✅ Hive created successfully", hive });
-   } catch (err) {
-      if (err.message === "HIVE_CODE_LIMIT_REACHED") {
-         return res.status(400).json({ error: "Hive code limit reached (99-99)." });
-      }
-      console.error("❌ Unexpected error in hive creation:", err);
-      return res.status(500).json({ error: "Unexpected server error" });
-   }
+    return res.status(201).json({
+      message: "Hive created successfully",
+      hive,
+    });
+  } catch (err) {
+    console.error("Unexpected error in hive creation:", err);
+    return res.status(500).json({ error: "Unexpected server error" });
+  }
 });
+
 
 /**
  * -----------------------------

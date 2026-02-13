@@ -65,7 +65,8 @@ const analyticsEvaluationsLongRouter = require("./routes/analyticsEvaluationsLon
 const queenRoutes = require("./routes/queen");
 const dashboardRouter = require("./routes/dashboard");
 const adminRoutes = require("./routes/admin");
-
+const adminSupportRouter = require("./routes/adminSupport");
+const diagRouter = require("./routes/diag");
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
 app.use("/api/hives", hivesRouter);
@@ -104,6 +105,8 @@ app.use("/api/analytics", analyticsEvaluationsLongRouter);
 app.use("/api/queen", queenRoutes);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/admin", adminRoutes);
+app.use("/api", adminSupportRouter);
+app.use("/api/diag", diagRouter);
 
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");
