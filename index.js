@@ -117,7 +117,9 @@ app.get("/", (req, res) => {
 // Allow server to listen on all network interfaces
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0";
-
+app.get("/health", (req, res) => res.status(200).send("ok"));
+console.log("✅ BOOT: process.env.PORT =", process.env.PORT);
+console.log("✅ BOOT: about to listen...");
 app.listen(PORT, HOST, () => {
    console.log(`🚀 Server running at http://${HOST}:${PORT}`);
    console.log("✅ BOOT: LOGGER VERSION = 2026-01-17-A");
