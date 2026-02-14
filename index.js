@@ -110,18 +110,23 @@ app.use("/api/admin", adminRoutes);
 app.use("/api", adminSupportRouter);
 app.use("/api/diag", diagRouter);
 app.use("/api/apiary-checklist", apiaryChecklistRouter);
+// ✅ health first (fast)
+app.get("/health", (req, res) => res.status(200).send("ok"));
+
 app.get("/", (req, res) => {
-   res.send("Hello from B-Stats backend!");
+  res.send("Hello from B-Stats backend!");
 });
 
 // Allow server to listen on all network interfaces
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
-app.get("/health", (req, res) => res.status(200).send("ok"));
+
 console.log("✅ BOOT: process.env.PORT =", process.env.PORT);
-console.log("✅ BOOT: about to listen...");
+console.log("✅ BOOT: about to listen...", HOST, PORT);
+
 app.listen(PORT, HOST, () => {
-   console.log(`🚀 Server running at http://${HOST}:${PORT}`);
-   console.log("✅ BOOT: LOGGER VERSION = 2026-01-17-A");
-   console.log("✅ BOOT FILE:", __filename);
+  console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+  console.log("✅ BOOT: LOGGER VERSION = 2026-01-17-A");
+  console.log("✅ BOOT FILE:", __filename);
 });
+
