@@ -67,6 +67,8 @@ const dashboardRouter = require("./routes/dashboard");
 const adminRoutes = require("./routes/admin");
 const adminSupportRouter = require("./routes/adminSupport");
 const diagRouter = require("./routes/diag");
+const apiaryChecklistRouter = require("./routes/apiaryChecklist");
+
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
 app.use("/api/hives", hivesRouter);
@@ -107,7 +109,7 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/admin", adminRoutes);
 app.use("/api", adminSupportRouter);
 app.use("/api/diag", diagRouter);
-
+app.use("/api/apiary-checklist", apiaryChecklistRouter);
 app.get("/", (req, res) => {
    res.send("Hello from B-Stats backend!");
 });
