@@ -2,6 +2,7 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../utils/supabaseClient");
+const rateLimit = require("express-rate-limit");
 
 /* ------------------------- Helpers ------------------------- */
 function mapLoginError(err) {
@@ -60,9 +61,62 @@ function mapLoginError(err) {
    };
 }
 
+const normalizeEmail = (v) =>
+   String(v || "")
+      .trim()
+      .toLowerCase();
+function getDomain(email) {
+   return normalizeEmail(email).split("@")[1] || "";
+}
+
+/* ------------------------- Anti-spam lists (server-side) ------------------------- */
+const DISPOSABLE_DOMAINS = new Set([
+   "mailinator.com",
+   "tempmail.com",
+   "10minutemail.com",
+   "guerrillamail.com",
+   "yopmail.com",
+   "yopmail.fr",
+   "yopmail.net",
+   "trashmail.com",
+]);
+
+const COMMON_TYPO_DOMAINS = new Set([
+   "gmai.com",
+   "gmail.co",
+   "gmial.com",
+   "yaho.com",
+   "hotnail.com",
+   "outllok.com",
+]);
+
+/* ------------------------- Rate limiters ------------------------- */
+const forgotLimiter = rateLimit({
+   windowMs: 15 * 60 * 1000,
+   max: 5, // 5 محاولات / 15 دقيقة لكل IP
+   standardHeaders: true,
+   legacyHeaders: false,
+});
+
+const signupLimiter = rateLimit({
+   windowMs: 15 * 60 * 1000,
+   max: 10, // 10 تسجيلات / 15 دقيقة لكل IP
+   standardHeaders: true,
+   legacyHeaders: false,
+});
+
+const loginLimiter = rateLimit({
+   windowMs: 10 * 60 * 1000,
+   max: 20, // 20 محاولات / 10 دقائق لكل IP
+   standardHeaders: true,
+   legacyHeaders: false,
+});
+
 /* ------------------------- Signup ------------------------- */
-router.post("/signup", async (req, res) => {
-   const { email, password, full_name } = req.body;
+router.post("/signup", signupLimiter, async (req, res) => {
+   const email = normalizeEmail(req.body.email);
+   const password = String(req.body.password || "");
+   const full_name = String(req.body.full_name || "").trim();
 
    if (!email || !password || !full_name) {
       return res.status(400).json({
@@ -73,11 +127,32 @@ router.post("/signup", async (req, res) => {
       });
    }
 
-   // 1) Create user
+   // ✅ basic email shape
+   if (!email.includes("@") || email.length < 6) {
+      return res.status(400).json({
+         error: { code: "INVALID_EMAIL", message: "Please enter a valid email." },
+      });
+   }
+
+   // ✅ server-side domain checks (don’t trust front)
+   const domain = getDomain(email);
+   if (domain && DISPOSABLE_DOMAINS.has(domain)) {
+      return res.status(400).json({
+         error: { code: "DISPOSABLE_EMAIL", message: "Temporary emails are not allowed." },
+      });
+   }
+
+   if (domain && COMMON_TYPO_DOMAINS.has(domain)) {
+      return res.status(400).json({
+         error: { code: "EMAIL_DOMAIN_TYPO", message: "Please check your email domain." },
+      });
+   }
+
+   // 1) Create user (do NOT auto-confirm fake emails)
    const { data: userData, error: signUpError } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true,
+      email_confirm: false,
    });
 
    if (signUpError) {
@@ -123,8 +198,9 @@ router.post("/signup", async (req, res) => {
 });
 
 /* ------------------------- Login ------------------------- */
-router.post("/login", async (req, res) => {
-   const { email, password } = req.body;
+router.post("/login", loginLimiter, async (req, res) => {
+   const email = normalizeEmail(req.body.email);
+   const password = String(req.body.password || "");
 
    if (!email || !password) {
       return res.status(400).json({
@@ -191,53 +267,52 @@ router.post("/login", async (req, res) => {
 });
 
 /* ------------------------- Forgot password ------------------------- */
-router.post("/forgot-password", async (req, res) => {
-   const { email } = req.body;
+router.post("/forgot-password", forgotLimiter, async (req, res) => {
+   const email = normalizeEmail(req.body.email);
 
-   if (!email) {
-      return res.status(400).json({
-         error: {
-            code: "MISSING_EMAIL",
-            message: "Email is required",
-         },
+   // ✅ generic response always
+   const ok = () =>
+      res.status(200).json({
+         message: "✅ If this email exists, a reset link has been sent.",
       });
-   }
+
+   if (!email || !email.includes("@")) return ok();
 
    try {
+      // ✅ check existence first (prevents bounces)
+      const { data, error: listErr } = await supabase.auth.admin.listUsers({
+         page: 1,
+         perPage: 5000,
+      });
+
+      if (listErr || !data?.users) {
+         console.warn("🔶 listUsers failed:", listErr?.message);
+         return ok();
+      }
+
+      const exists = data.users.some((u) => (u.email || "").toLowerCase() === email);
+      if (!exists) return ok();
+
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
          redirectTo: "bstats://reset-password",
       });
 
-      // For security, don’t reveal if email exists or not
       if (error) {
-         console.error("🔴 Forgot-password Supabase error:", error);
-         // still return generic success if you want maximum privacy:
-         // return res.status(200).json({ message: "✅ If this email exists, a reset link has been sent." });
-         return res.status(400).json({
-            error: {
-               code: "FORGOT_PASSWORD_FAILED",
-               message: error.message,
-            },
-         });
+         console.warn("🔶 resetPasswordForEmail error:", error.message);
+         return ok();
       }
 
-      return res.status(200).json({
-         message: "✅ If this email exists, a reset link has been sent.",
-      });
+      return ok();
    } catch (err) {
       console.error("Forgot-password server error:", err);
-      return res.status(500).json({
-         error: {
-            code: "SERVER_ERROR",
-            message: "Server error while sending reset email",
-         },
-      });
+      return ok();
    }
 });
 
 /* ------------------------- Reset password ------------------------- */
 router.post("/reset-password", async (req, res) => {
-   const { access_token, new_password } = req.body;
+   const access_token = String(req.body.access_token || "");
+   const new_password = String(req.body.new_password || "");
 
    if (!access_token || !new_password) {
       return res.status(400).json({
@@ -295,7 +370,7 @@ router.post("/reset-password", async (req, res) => {
 
 /* ------------------------- Refresh token ------------------------- */
 router.post("/refresh", async (req, res) => {
-   const { refresh_token } = req.body;
+   const refresh_token = String(req.body.refresh_token || "");
 
    if (!refresh_token) {
       return res.status(400).json({
@@ -340,7 +415,6 @@ router.post("/refresh", async (req, res) => {
 
       return res.status(200).json({
          access_token: session.access_token,
-         // if Supabase doesn't send a new one, reuse the old
          refresh_token: session.refresh_token || refresh_token,
          user,
       });
