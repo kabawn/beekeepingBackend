@@ -1,6 +1,7 @@
 // routes/hives.js
 const express = require("express");
 const router = express.Router();
+const pool = require("../db");
 const { v4: uuidv4 } = require("uuid");
 const QRCode = require("qrcode");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
@@ -540,5 +541,40 @@ router.get("/:id", authenticateUser, async (req, res) => {
       return res.status(500).json({ error: "Unexpected server error while fetching hive" });
    }
 });
+
+// ✅ GET /hives (all hives)
+router.get("/", authenticateUser, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        h.hive_id,
+        h.hive_code,
+        h.hive_type,
+        h.hive_purpose,
+        h.empty_weight,
+        h.frame_capacity,
+        h.active,
+        h.in_service,
+        h.apiary_id,
+        h.created_at,
+        a.apiary_name
+      FROM hives h
+      JOIN apiaries a ON a.apiary_id = h.apiary_id
+      WHERE a.owner_user_id = $1
+      ORDER BY h.created_at DESC;
+      `,
+      [userId]
+    );
+
+    return res.status(200).json({ hives: result.rows });
+  } catch (err) {
+    console.error("Error fetching hives:", err);
+    return res.status(500).json({ error: "Server error while fetching hives" });
+  }
+});
+
 
 module.exports = router;
