@@ -3,6 +3,9 @@ const cors = require("cors");
 require("dotenv").config();
 const app = express();
 
+// ✅ ADD THIS (قبل أي routes / rate-limit)
+app.set("trust proxy", 1); // Railway/Heroku عادة Proxy واحد
+
 app.use(cors());
 app.use(express.json());
 
