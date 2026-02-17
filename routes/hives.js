@@ -496,7 +496,37 @@ router.delete("/:id", authenticateUser, async (req, res) => {
       const owned = await getHiveIfOwnedByUser(id, userId, "hive_id");
       if (!owned.ok) return res.status(owned.status).json({ error: owned.error });
 
-      const { error } = await supabase.from("hives").delete().eq("hive_id", Number(id));
+      const hiveIdNum = Number(id);
+      if (!Number.isFinite(hiveIdNum)) {
+         return res.status(400).json({ error: "Invalid hive id" });
+      }
+
+      // ✅ Minimal precheck for RESTRICT tables (inventory_present / inventory_missing)
+      const { count: presentCount, error: pErr } = await supabase
+         .from("inventory_present")
+         .select("id", { count: "exact", head: true })
+         .eq("hive_id", hiveIdNum);
+
+      const { count: missingCount, error: mErr } = await supabase
+         .from("inventory_missing")
+         .select("id", { count: "exact", head: true })
+         .eq("hive_id", hiveIdNum);
+
+      if (pErr || mErr) {
+         return res.status(400).json({ error: (pErr || mErr).message });
+      }
+
+      if ((presentCount || 0) > 0 || (missingCount || 0) > 0) {
+         return res.status(409).json({
+            error: "Cannot delete hive: inventory records exist.",
+            code: "HIVE_DELETE_RESTRICTED_BY_INVENTORY",
+            presentCount: presentCount || 0,
+            missingCount: missingCount || 0,
+         });
+      }
+
+      // ✅ Delete hive (CASCADE will remove related rows where applicable)
+      const { error } = await supabase.from("hives").delete().eq("hive_id", hiveIdNum);
 
       if (error) return res.status(400).json({ error: error.message });
 
