@@ -164,6 +164,8 @@ router.post("/signup", signupLimiter, async (req, res) => {
       });
    }
 
+   
+
    const userId = userData.user.id;
 
    // 2) Insert profile

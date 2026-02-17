@@ -487,6 +487,25 @@ router.patch("/:id/reassign", authenticateUser, async (req, res) => {
    }
 });
 
+router.delete("/:id", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+   const userId = req.user?.id;
+
+   try {
+      const owned = await getHiveIfOwnedByUser(id, userId, "hive_id");
+      if (!owned.ok) return res.status(owned.status).json({ error: owned.error });
+
+      const { error } = await supabase.from("hives").delete().eq("hive_id", Number(id));
+
+      if (error) return res.status(400).json({ error: error.message });
+
+      return res.status(200).json({ message: "Hive deleted successfully" });
+   } catch (err) {
+      console.error("❌ Error deleting hive:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
 // ✅ GET hive by ID (🔒 ownership protected) — FULL ROUTE + logs on failure
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
