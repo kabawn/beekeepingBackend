@@ -1,37 +1,29 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+
 const app = express();
 
-// ✅ ADD THIS (قبل أي routes / rate-limit)
-app.set("trust proxy", 1); // Railway/Heroku عادة Proxy واحد
+// ✅ Railway / proxies
+app.set("trust proxy", true);
 
 app.use(cors());
 app.use(express.json());
-
 app.set("etag", false);
+
+// ✅ health + root FIRST (fast, no auth, no db)
+app.get("/health", (req, res) => res.status(200).send("ok"));
+app.get("/", (req, res) => res.status(200).send("Hello from B-Stats backend!"));
 
 // 🔎 Safe request logger
 app.use((req, res, next) => {
    const start = Date.now();
-
    res.on("finish", () => {
       const ms = Date.now() - start;
       console.log(`➡️ ${req.method} ${req.originalUrl} -> ${res.statusCode} (${ms}ms)`);
    });
-
    next();
 });
-
-// 🌍 Logging middleware (DISABLED – leaks sensitive data)
-// app.use((req, res, next) => {
-//    console.log(`📡 ${req.method} Request to ${req.url}`);
-//    console.log("🔹 Headers:", req.headers);
-//    console.log("🔹 Body:", req.body);
-//    console.log("🔹 Params:", req.params);
-//    console.log("🔹 Query:", req.query);
-//    next();
-// });
 
 // Import routers
 const apiariesRouter = require("./routes/apiaries");
@@ -83,11 +75,11 @@ app.use("/api/inspections", inspectionsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/companies", companiesRouter);
 app.use("/api/invitations", invitationsRoutes);
-app.use("/api/hives/pdf", hivesQrPdfRouter); // change prefix
+app.use("/api/hives/pdf", hivesQrPdfRouter);
 app.use("/api/apiary-notes", apiaryNotesRouter);
 app.use("/api/queen-pedigree", queenPedigreeRouter);
 app.use("/api/queen-characteristics", queenCharacteristicsRouter);
-app.use("/api/hives/public", hivesPublicRouter); // change prefix
+app.use("/api/hives/public", hivesPublicRouter);
 app.use("/api/available-keys", availablePublicKeysRoutes);
 app.use("/api/notation-config", notationConfigRouter);
 app.use("/api/colony-notations", colonyNotationsRouter);
@@ -99,7 +91,6 @@ app.use("/api/nuc-cycles", nucCycles);
 app.use("/api/super-types", require("./routes/superTypes"));
 app.use("/api/hive-types", hiveTypesRoutes);
 app.use("/api/hive-purposes", hivePurposesRoutes);
-
 app.use("/api/nuc-sessions", require("./routes/nucSessions"));
 app.use("/api/interventions", interventionsRoutes);
 app.use("/api/swarm", swarmProductionRoutes);
@@ -113,23 +104,23 @@ app.use("/api/admin", adminRoutes);
 app.use("/api", adminSupportRouter);
 app.use("/api/diag", diagRouter);
 app.use("/api/apiary-checklist", apiaryChecklistRouter);
-// ✅ health first (fast)
-app.get("/health", (req, res) => res.status(200).send("ok"));
 
-app.get("/", (req, res) => {
-  res.send("Hello from B-Stats backend!");
-});
-
-// Allow server to listen on all network interfaces
+// ✅ Start server
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
 
 console.log("✅ BOOT: process.env.PORT =", process.env.PORT);
 console.log("✅ BOOT: about to listen...", HOST, PORT);
 
-app.listen(PORT, HOST, () => {
-  console.log(`🚀 Server running at http://${HOST}:${PORT}`);
-  console.log("✅ BOOT: LOGGER VERSION = 2026-01-17-A");
-  console.log("✅ BOOT FILE:", __filename);
+const server = app.listen(PORT, HOST, () => {
+   console.log(`🚀 Server running at http://${HOST}:${PORT}`);
 });
 
+// ✅ Graceful shutdown (fix 502 during restarts)
+process.on("SIGTERM", () => {
+   console.log("🛑 SIGTERM received. Closing server...");
+   server.close(() => {
+      console.log("✅ Server closed.");
+      process.exit(0);
+   });
+});
