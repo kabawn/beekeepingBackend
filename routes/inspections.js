@@ -438,6 +438,92 @@ function buildHiveSummary(inspectionsSortedDesc) {
       },
    };
 }
+// ----------------------------
+// ✅ GET /inspections
+// Returns: inspections[] (with analysis + ratios) for current user
+// Optional query params:
+//   - limit (default 100, max 500)
+//   - offset (default 0)
+// ----------------------------
+router.get("/", authenticateUser, async (req, res) => {
+  const userId = req.user.id;
+
+  const limit = Math.min(parseInt(req.query.limit ?? "100", 10) || 100, 500);
+  const offset = parseInt(req.query.offset ?? "0", 10) || 0;
+
+  try {
+    const { data: inspections, error } = await supabase
+      .from("hive_inspections")
+      .select(
+        `
+          *,
+          hives (
+            hive_code,
+            frame_capacity,
+            apiary_id,
+            apiaries (
+              apiary_name,
+              owner_user_id
+            )
+          )
+        `
+      )
+      .eq("user_id", userId)
+      // ✅ filtre ownership redondant (sécurité), au cas où
+      .eq("hives.apiaries.owner_user_id", userId)
+      .order("inspection_date", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    const computed = (inspections || []).map((insp) => {
+      const analysis = analyzeInspection(insp);
+
+      const frameCapacity = insp.hives?.frame_capacity ?? null;
+      const missingFrames =
+        frameCapacity != null && insp.frame_count != null
+          ? frameCapacity - insp.frame_count
+          : null;
+
+      const bee_ratio =
+        insp.frame_count && insp.bee_frames != null
+          ? insp.bee_frames / insp.frame_count
+          : null;
+
+      const brood_ratio =
+        insp.frame_count && insp.brood_frames != null
+          ? insp.brood_frames / insp.frame_count
+          : null;
+
+      return {
+        ...insp,
+
+        // ✅ champs “computed” cohérents avec /inspections/hive/:hive_id
+        missing_frames: missingFrames,
+        bee_ratio,
+        brood_ratio,
+        analysis,
+
+        // ✅ champs utiles front (évite d’aller chercher deep nested)
+        hive_code: insp.hives?.hive_code ?? null,
+        apiary_id: insp.hives?.apiary_id ?? null,
+        apiary_name: insp.hives?.apiaries?.apiary_name ?? null,
+      };
+    });
+
+    // Optionnel : trend comme sur /hive/:hive_id (mais ici c’est global, donc trend moins pertinent)
+    // -> je ne le calcule pas pour éviter une interprétation bizarre cross-hives.
+
+    return res.status(200).json({
+      inspections: computed,
+      pagination: { limit, offset, returned: computed.length },
+    });
+  } catch (err) {
+    console.error("Unexpected error in GET /inspections:", err);
+    return res.status(500).json({ error: "Unexpected server error" });
+  }
+});
+
 
 // ----------------------------
 // ✅ POST /inspections
