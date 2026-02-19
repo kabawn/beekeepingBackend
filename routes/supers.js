@@ -4,6 +4,77 @@ const router = express.Router();
 const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 const { v4: uuidv4 } = require("uuid");
+// ✅ add
+const QRCode = require("qrcode");
+const PDFDocument = require("pdfkit");
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
+
+/**
+ * -----------------------------
+ * ✅ Helpers
+ * -----------------------------
+ */
+
+async function getUserLabel(userId) {
+   // Prefer company name if user has company_id, else full_name
+   const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("full_name, company_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+   if (profile?.company_id) {
+      const { data: company } = await supabase
+         .from("companies")
+         .select("company_name")
+         .eq("company_id", profile.company_id)
+         .maybeSingle();
+
+      if (company?.company_name) return company.company_name;
+   }
+
+   if (profile?.full_name) return profile.full_name;
+   return "Super Owner";
+}
+
+async function getSuperByPublicKeyIfOwned(public_key, userId, select = "*") {
+   const { data, error } = await supabase
+      .from("supers")
+      .select(select)
+      .eq("public_key", String(public_key).trim())
+      .eq("owner_user_id", userId)
+      .maybeSingle();
+
+   if (error) return { ok: false, status: 400, error: error.message };
+   if (!data) return { ok: false, status: 404, error: "Super not found" };
+   return { ok: true, status: 200, super: data };
+}
+
+async function renderSuperLabelPng({ public_key, super_code }) {
+   const canvas = createCanvas(300, 380);
+   const ctx = canvas.getContext("2d");
+
+   ctx.fillStyle = "#fff";
+   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+   // ✅ QR contains ONLY public_key
+   const qrDataUrl = await QRCode.toDataURL(String(public_key).trim());
+   const qrImg = await loadImage(qrDataUrl);
+   ctx.drawImage(qrImg, 25, 20, 250, 250);
+
+   // ✅ only the code (language independent)
+   ctx.fillStyle = "#000";
+   ctx.textAlign = "center";
+
+   ctx.font = "bold 28px Arial";
+   ctx.fillText(String(super_code).trim(), 150, 315);
+
+   // ✅ subtle branding
+   ctx.font = "16px Arial";
+   ctx.fillText("BeeStats", 150, 345);
+
+   return canvas.toBuffer("image/png");
+}
 
 /**
  * =========================================================
@@ -12,22 +83,16 @@ const { v4: uuidv4 } = require("uuid");
  * ⚠️ This can be heavy. Remove if not used by the app.
  */
 router.get("/", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+
    try {
-      const userId = req.user.id;
+      const { data, error } = await supabase
+         .from("supers")
+         .select("*")
+         .eq("owner_user_id", userId)
+         .order("created_at", { ascending: false });
 
-      const { data: hives, error: hivesError } = await supabase
-         .from("hives")
-         .select("hive_id")
-         .eq("owner_user_id", userId);
-
-      if (hivesError) throw hivesError;
-
-      const hiveIds = (hives || []).map((h) => h.hive_id);
-      if (!hiveIds.length) return res.json([]);
-
-      const { data, error } = await supabase.from("supers").select("*").in("hive_id", hiveIds);
-      if (error) throw error;
-
+      if (error) return res.status(400).json({ error: error.message });
       return res.json(data || []);
    } catch (err) {
       console.error("Error fetching supers:", err);
@@ -121,7 +186,6 @@ router.get("/identifier/:super_code", authenticateUser, async (req, res) => {
          .eq("owner_user_id", userId)
          .maybeSingle();
 
- 
       if (error || !data) {
          return res.status(404).json({ error: "Super not found or not owned by user" });
       }
@@ -671,7 +735,7 @@ router.post("/", authenticateUser, async (req, res) => {
                super_code: finalSuperCode,
                super_type: finalTypeText,
                purpose_super,
-               qr_code: qr_code || `https://yourapp.com/super/${finalPublicKey}`,
+               qr_code: qr_code || `SUPER:${String(finalPublicKey).trim()}`,
                weight_empty: finalWeightEmptyKg,
                active: finalActive,
                service_in: finalServiceIn,
@@ -715,6 +779,137 @@ router.patch("/:id/unlink", authenticateUser, async (req, res) => {
       return res.status(200).json({ message: "Super unlinked successfully", super: data });
    } catch (err) {
       console.error("❌ Error unlinking super:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+/**
+ * =========================================================
+ * ✅ A) GET /supers/qr-download/:public_key  (single PNG)
+ * =========================================================
+ */
+router.get("/qr-download/:public_key", authenticateUser, async (req, res) => {
+   const { public_key } = req.params;
+   const userId = req.user.id;
+
+   try {
+      const owned = await getSuperByPublicKeyIfOwned(public_key, userId, "super_code, public_key");
+      if (!owned.ok) return res.status(owned.status).json({ error: owned.error });
+
+      const buffer = await renderSuperLabelPng({
+         public_key: owned.super.public_key,
+         super_code: owned.super.super_code,
+      });
+
+      res.setHeader("Content-Disposition", `attachment; filename=super-${public_key}.png`);
+      res.setHeader("Content-Type", "image/png");
+      return res.send(buffer);
+   } catch (err) {
+      console.error("❌ super qr-download error:", err);
+      return res.status(500).json({ error: "❌ Failed to generate QR image" });
+   }
+});
+
+/**
+ * =========================================================
+ * ✅ B) GET /supers/qr-pdf  (download ALL supers labels PDF)
+ * Query:
+ *   - ?active=true  (only active)
+ *   - ?active=false (only inactive)
+ *   - (no active param) => all
+ * =========================================================
+ */
+// ✅ B) GET /supers/qr-pdf  (download ALL supers labels PDF)
+// Query:
+//   - ?active=true  (only active)
+//   - ?active=false (only inactive)
+//   - (no active param) => all
+router.get("/qr-pdf", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const activeParam = req.query.active; // "true" | "false" | undefined
+
+   try {
+      let q = supabase
+         .from("supers")
+         .select("super_code, public_key, active, created_at")
+         .eq("owner_user_id", userId)
+         .order("created_at", { ascending: true });
+
+      if (activeParam === "true") q = q.eq("active", true);
+      if (activeParam === "false") q = q.eq("active", false);
+
+      const { data: supers, error } = await q;
+      if (error) return res.status(400).json({ error: error.message });
+
+      const list = Array.isArray(supers)
+         ? supers.filter((s) => s?.public_key && s?.super_code)
+         : [];
+
+      if (list.length === 0) {
+         return res.status(404).json({ error: "No supers found for this user" });
+      }
+
+      // ---- PDF config (A4, 3 per row) ----
+      const doc = new PDFDocument({ size: "A4", margin: 24 });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=supers-labels.pdf`);
+      doc.pipe(res);
+
+      const cols = 3;
+      const rows = 4; // 12 labels per page
+
+      const gapX = 12;
+      const gapY = 12;
+
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+
+      const usableW = pageW - doc.page.margins.left - doc.page.margins.right;
+      const usableH = pageH - doc.page.margins.top - doc.page.margins.bottom;
+
+      const cellW = (usableW - gapX * (cols - 1)) / cols;
+      const cellH = (usableH - gapY * (rows - 1)) / rows;
+
+      // your PNG is 300x380 => keep aspect
+      let targetW = Math.min(cellW, 200);
+      let targetH = (targetW * 380) / 300;
+
+      // if height doesn't fit, fit by height instead
+      if (targetH > cellH) {
+         targetH = cellH;
+         targetW = (targetH * 300) / 380;
+      }
+
+      let i = 0;
+
+      for (const s of list) {
+         if (i > 0 && i % (cols * rows) === 0) doc.addPage();
+
+         const indexOnPage = i % (cols * rows);
+         const r = Math.floor(indexOnPage / cols);
+         const c = indexOnPage % cols;
+
+         const x0 = doc.page.margins.left + c * (cellW + gapX);
+         const y0 = doc.page.margins.top + r * (cellH + gapY);
+
+         const x = x0 + (cellW - targetW) / 2;
+         const y = y0 + (cellH - targetH) / 2;
+
+         // ✅ NO label param (we don't want "Super Owner")
+         const pngBuffer = await renderSuperLabelPng({
+            public_key: String(s.public_key).trim(),
+            super_code: String(s.super_code).trim(),
+         });
+
+         doc.image(pngBuffer, x, y, { width: targetW });
+
+         i += 1;
+      }
+
+      doc.end();
+   } catch (err) {
+      console.error("❌ supers qr-pdf error:", err);
       return res.status(500).json({ error: "Unexpected server error" });
    }
 });
