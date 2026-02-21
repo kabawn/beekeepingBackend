@@ -516,10 +516,10 @@ router.get("/:id/hives/qr-pdf", authenticateUser, async (req, res) => {
 // Apiaries list + hives count + last inspection date
 // -----------------------------
 router.get("/summary", authenticateUser, async (req, res) => {
-  const userId = req.user.id;
+   const userId = req.user.id;
 
-  try {
-    const sql = `
+   try {
+      const sql = `
       SELECT
         a.apiary_id,
         a.apiary_name,
@@ -536,15 +536,14 @@ router.get("/summary", authenticateUser, async (req, res) => {
       ORDER BY a.apiary_id::int ASC;
     `;
 
-    const { rows } = await pool.query(sql, [userId]);
+      const { rows } = await pool.query(sql, [userId]);
 
-    return res.json({ apiaries: rows });
-  } catch (error) {
-    console.error("Error fetching apiaries summary:", error);
-    return res.status(500).json({ error: "Server error while fetching apiaries summary" });
-  }
+      return res.json({ apiaries: rows });
+   } catch (error) {
+      console.error("Error fetching apiaries summary:", error);
+      return res.status(500).json({ error: "Server error while fetching apiaries summary" });
+   }
 });
-
 
 // GET ONE APIARY (with productions[])
 router.get("/:id", authenticateUser, async (req, res) => {
@@ -663,9 +662,6 @@ router.put("/:id", authenticateUser, async (req, res) => {
    }
 });
 
-
-
-
 // DELETE APIARY
 router.delete("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
@@ -676,9 +672,11 @@ router.delete("/:id", authenticateUser, async (req, res) => {
          "DELETE FROM apiaries WHERE apiary_id = $1 AND owner_user_id = $2 RETURNING *",
          [id, userId],
       );
+
       if (result.rows.length === 0) {
          return res.status(404).json({ error: "Apiary not found" });
       }
+
       res.json({ message: "Apiary deleted successfully", apiary: result.rows[0] });
    } catch (error) {
       console.error("Error deleting apiary:", error);
