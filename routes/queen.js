@@ -66,7 +66,7 @@ router.put("/settings", async (req, res) => {
             g10_offset_days,
             emergence_offset_days,
             laying_offset_days,
-         ]
+         ],
       );
 
       res.json({ settings: rows[0] });
@@ -87,10 +87,10 @@ router.get("/strains", async (req, res) => {
          `
          SELECT *
          FROM queen_strains
-         WHERE owner_id = $1
+         WHERE owner_id = $1 AND archived_at IS NULL
          ORDER BY season DESC, name ASC
          `,
-         [ownerId]
+         [ownerId],
       );
       res.json({ strains: rows });
    } catch (err) {
@@ -154,7 +154,7 @@ router.post("/strains", async (req, res) => {
             insemination2_date,
             strainClass,
             selector,
-         ]
+         ],
       );
 
       res.status(201).json({ strain: rows[0] });
@@ -203,7 +203,7 @@ router.put("/strains/:id", async (req, res) => {
             class = COALESCE($14, class),
             selector = COALESCE($15, selector),
             updated_at = now()
-         WHERE id = $1 AND owner_id = $2
+         WHERE id = $1 AND owner_id = $2 AND archived_at IS NULL
          RETURNING *
          `,
          [
@@ -222,7 +222,7 @@ router.put("/strains/:id", async (req, res) => {
             insemination2_date,
             strainClass,
             selector,
-         ]
+         ],
       );
 
       if (!rows.length) {
@@ -241,17 +241,58 @@ router.delete("/strains/:id", async (req, res) => {
    const strainId = req.params.id;
 
    try {
-      const { rowCount } = await pool.query(
-         `DELETE FROM queen_strains WHERE id = $1 AND owner_id = $2`,
-         [strainId, ownerId]
+      // موجودة وملكك؟
+      const strainRes = await pool.query(
+         `SELECT id, name, archived_at
+       FROM queen_strains
+       WHERE id = $1 AND owner_id = $2
+       LIMIT 1`,
+         [strainId, ownerId],
       );
-      if (!rowCount) {
+      if (!strainRes.rows.length) {
          return res.status(404).json({ error: "Strain not found" });
       }
-      res.json({ success: true });
+
+      // مستخدمة في graft lines؟
+      const usedRes = await pool.query(
+         `SELECT 1
+       FROM queen_graft_lines gl
+       JOIN queen_graft_sessions gs ON gs.id = gl.session_id
+       WHERE gl.strain_id = $1 AND gs.owner_id = $2
+       LIMIT 1`,
+         [strainId, ownerId],
+      );
+
+      // إذا مستخدمة → Archive بدل حذف
+      if (usedRes.rows.length > 0) {
+         const archived = await pool.query(
+            `UPDATE queen_strains
+         SET archived_at = COALESCE(archived_at, now()), updated_at = now()
+         WHERE id = $1 AND owner_id = $2
+         RETURNING *`,
+            [strainId, ownerId],
+         );
+
+         return res.status(200).json({
+            success: true,
+            archived: true,
+            message: "Strain is used in graft lines, so it was archived instead of deleted.",
+            strain: archived.rows[0],
+         });
+      }
+
+      // إذا مش مستخدمة → Delete فعلي
+      const del = await pool.query(
+         `DELETE FROM queen_strains
+       WHERE id = $1 AND owner_id = $2
+       RETURNING *`,
+         [strainId, ownerId],
+      );
+
+      return res.json({ success: true, deleted: true, strain: del.rows[0] });
    } catch (err) {
       console.error("Error deleting queen strain:", err);
-      res.status(500).json({ error: "Error deleting queen strain" });
+      return res.status(500).json({ error: "Error deleting queen strain" });
    }
 });
 
@@ -294,7 +335,7 @@ router.post("/grafts", async (req, res) => {
          VALUES ($1,$2,$3,$4,$5)
          RETURNING *
          `,
-         [ownerId, season, graft_date, graftIndex, dayOfYear]
+         [ownerId, season, graft_date, graftIndex, dayOfYear],
       );
       const session = sessionInsert.rows[0];
 
@@ -347,7 +388,7 @@ router.post("/grafts", async (req, res) => {
                g10,
                emergence,
                laying,
-            ]
+            ],
          );
 
          createdLines.push(lineInsert.rows[0]);
@@ -388,7 +429,7 @@ router.get("/grafts", async (req, res) => {
          GROUP BY gs.id
          ORDER BY gs.graft_date DESC
          `,
-         [ownerId]
+         [ownerId],
       );
 
       res.json({ sessions: rows });
@@ -410,7 +451,7 @@ router.get("/grafts/:id", async (req, res) => {
          FROM queen_graft_sessions
          WHERE id = $1 AND owner_id = $2
          `,
-         [sessionId, ownerId]
+         [sessionId, ownerId],
       );
 
       if (!sessionRes.rows.length) {
@@ -430,7 +471,7 @@ router.get("/grafts/:id", async (req, res) => {
          WHERE gl.session_id = $1
          ORDER BY gl.line_index_in_session ASC
          `,
-         [sessionId]
+         [sessionId],
       );
 
       res.json({
@@ -465,7 +506,7 @@ router.put("/grafts/lines/:lineId", async (req, res) => {
         AND gs.owner_id = $2
       RETURNING gl.*;
       `,
-         [lineId, ownerId, num_strips, cells_accepted]
+         [lineId, ownerId, num_strips, cells_accepted],
       );
 
       if (!rows.length) {
@@ -501,7 +542,7 @@ router.post("/grafts/lines/:lineId/cells/generate", async (req, res) => {
          JOIN queen_graft_sessions gs ON gs.id = gl.session_id
          WHERE gl.id = $1 AND gs.owner_id = $2
          `,
-         [lineId, ownerId]
+         [lineId, ownerId],
       );
 
       if (!lineRows.length) {
@@ -550,7 +591,7 @@ router.get("/grafts/lines/:lineId/cells", async (req, res) => {
          WHERE c.line_id = $1 AND gs.owner_id = $2
          ORDER BY c.cell_index ASC
          `,
-         [lineId, ownerId]
+         [lineId, ownerId],
       );
       res.json({ cells: rows });
    } catch (err) {
@@ -599,7 +640,7 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
          WHERE c.line_id = $1 AND gs.owner_id = $2
          ORDER BY c.cell_index ASC
          `,
-         [lineId, ownerId]
+         [lineId, ownerId],
       );
 
       if (!cells.length) {
@@ -677,8 +718,8 @@ router.get("/grafts/lines/:lineId/cells/labels.pdf", async (req, res) => {
             graftDateShort && layingShort
                ? `Greffage : ${graftDateShort} [${layingShort}]`
                : graftDateShort
-               ? `Greffage : ${graftDateShort}`
-               : "";
+                 ? `Greffage : ${graftDateShort}`
+                 : "";
 
          const rucherLine = `Ruchers de Cocagne - ${cell.season}`;
 
@@ -817,7 +858,7 @@ router.get("/breeders", async (req, res) => {
          WHERE owner_id = $1
          ORDER BY code ASC
          `,
-         [ownerId]
+         [ownerId],
       );
       res.json({ breeders: rows });
    } catch (err) {
@@ -842,7 +883,7 @@ router.post("/breeders", async (req, res) => {
          VALUES ($1, $2, $3)
          RETURNING *
          `,
-         [ownerId, code, name || null]
+         [ownerId, code, name || null],
       );
 
       res.status(201).json({ breeder: rows[0] });
@@ -869,7 +910,7 @@ router.put("/breeders/:id", async (req, res) => {
          WHERE id = $1 AND owner_id = $2
          RETURNING *
          `,
-         [breederId, ownerId, code, name]
+         [breederId, ownerId, code, name],
       );
 
       if (!rows.length) {
@@ -891,7 +932,7 @@ router.delete("/breeders/:id", async (req, res) => {
    try {
       const { rowCount } = await pool.query(
          `DELETE FROM queen_breeders WHERE id = $1 AND owner_id = $2`,
-         [breederId, ownerId]
+         [breederId, ownerId],
       );
 
       if (!rowCount) {
@@ -931,7 +972,7 @@ router.get("/analytics/dashboard", async (req, res) => {
          GROUP BY gs.season
          ORDER BY gs.season DESC
          `,
-         [ownerId, seasonParam]
+         [ownerId, seasonParam],
       );
 
       let seasonOverview = null;
@@ -968,7 +1009,7 @@ router.get("/analytics/dashboard", async (req, res) => {
          GROUP BY gs.id
          ORDER BY gs.graft_date DESC
          `,
-         [ownerId, seasonParam]
+         [ownerId, seasonParam],
       );
 
       const perGraft = perGraftRes.rows.map((row) => {
@@ -1003,7 +1044,7 @@ router.get("/analytics/dashboard", async (req, res) => {
          GROUP BY s.id, s.name, s.season
          ORDER BY s.season DESC, s.name ASC
          `,
-         [ownerId, seasonParam]
+         [ownerId, seasonParam],
       );
 
       const perStrain = perStrainRes.rows.map((row) => {
@@ -1079,7 +1120,7 @@ router.get("/analytics/dashboard", async (req, res) => {
          ) AS events
          ORDER BY event_date ASC, type ASC
          `,
-         [ownerId, seasonParam, daysAheadParam]
+         [ownerId, seasonParam, daysAheadParam],
       );
 
       const calendar = calendarRes.rows.map((row) => ({
