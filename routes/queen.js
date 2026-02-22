@@ -439,6 +439,36 @@ router.get("/grafts", async (req, res) => {
    }
 });
 
+// DELETE /queen/grafts/:id
+router.delete("/grafts/:id", async (req, res) => {
+   const ownerId = req.user.id;
+   const sessionId = req.params.id;
+
+   try {
+      // (اختياري) احذف الـ lines أولاً لو ماعندك ON DELETE CASCADE
+      await pool.query(
+         `DELETE FROM queen_graft_lines
+          WHERE session_id = $1`,
+         [sessionId],
+      );
+
+      const { rowCount } = await pool.query(
+         `DELETE FROM queen_graft_sessions
+          WHERE id = $1 AND owner_id = $2`,
+         [sessionId, ownerId],
+      );
+
+      if (!rowCount) {
+         return res.status(404).json({ error: "Graft session not found" });
+      }
+
+      return res.json({ success: true });
+   } catch (err) {
+      console.error("Error deleting graft session:", err);
+      return res.status(500).json({ error: "Error deleting graft session" });
+   }
+});
+
 // GET /queen/grafts/:id
 router.get("/grafts/:id", async (req, res) => {
    const ownerId = req.user.id;
