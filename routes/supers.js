@@ -118,9 +118,21 @@ router.get("/my", authenticateUser, async (req, res) => {
    try {
       let q = supabase
          .from("supers")
-         .select(
-            "super_id,super_code,super_type,purpose_super,weight_empty,active,service_in,hive_id,public_key,created_at",
-         )
+         .select(`
+            super_id,
+            super_code,
+            super_type,
+            purpose_super,
+            weight_empty,
+            active,
+            service_in,
+            hive_id,
+            public_key,
+            created_at,
+            hive:hives (
+               hive_code
+            )
+         `)
          .eq("owner_user_id", userId)
          .order("created_at", { ascending: false })
          .range(from, to);
