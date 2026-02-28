@@ -138,24 +138,26 @@ router.get("/", async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const sql = `
-      SELECT
-        h.id,
-        h.super_id,
-        h.full_weight::float8       AS gross_weight_kg,
-        h.empty_weight_kg::float8   AS empty_weight_kg,
-        h.net_honey_kg::float8      AS net_honey_kg,
-        h.harvest_date,
-        h.location,
-        s.super_code,
-        s.public_key,
-        h.hive_id,
-        h.apiary_id
-      FROM harvests h
-      JOIN supers s ON s.super_id = h.super_id
-      WHERE h.user_id = $1
-      ORDER BY h.id DESC
-    `;
+  const sql = `
+    SELECT
+      h.id,
+      h.super_id,
+      h.full_weight::float8       AS gross_weight_kg,
+      h.empty_weight_kg::float8   AS empty_weight_kg,
+      h.net_honey_kg::float8      AS net_honey_kg,
+      h.harvest_date,
+      h.location,
+      h.hive_id,
+      h.apiary_id,
+      a.apiary_name,          
+      s.super_code,
+      s.public_key
+    FROM harvests h
+    JOIN supers s ON s.super_id = h.super_id
+    LEFT JOIN apiaries a ON a.apiary_id = h.apiary_id
+    WHERE h.user_id = $1
+    ORDER BY h.id DESC
+  `;
     const { rows } = await pool.query(sql, [userId]);
     res.json(rows);
   } catch (error) {
