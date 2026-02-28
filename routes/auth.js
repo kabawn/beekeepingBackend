@@ -164,8 +164,6 @@ router.post("/signup", signupLimiter, async (req, res) => {
       });
    }
 
-   
-
    const userId = userData.user.id;
 
    // 2) Insert profile
@@ -272,7 +270,6 @@ router.post("/login", loginLimiter, async (req, res) => {
 router.post("/forgot-password", forgotLimiter, async (req, res) => {
    const email = normalizeEmail(req.body.email);
 
-   // ✅ generic response always
    const ok = () =>
       res.status(200).json({
          message: "✅ If this email exists, a reset link has been sent.",
@@ -281,7 +278,6 @@ router.post("/forgot-password", forgotLimiter, async (req, res) => {
    if (!email || !email.includes("@")) return ok();
 
    try {
-      // ✅ check existence first (prevents bounces)
       const { data, error: listErr } = await supabase.auth.admin.listUsers({
          page: 1,
          perPage: 5000,
@@ -293,6 +289,9 @@ router.post("/forgot-password", forgotLimiter, async (req, res) => {
       }
 
       const exists = data.users.some((u) => (u.email || "").toLowerCase() === email);
+
+      console.log("🟡 FORGOT email:", email, "exists:", exists);
+
       if (!exists) return ok();
 
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -300,10 +299,13 @@ router.post("/forgot-password", forgotLimiter, async (req, res) => {
       });
 
       if (error) {
-         console.warn("🔶 resetPasswordForEmail error:", error.message);
+         console.warn("🔴 resetPasswordForEmail error:", error.message);
+         // 👇 مهم: اطبع نوع الخطأ
+         console.warn("🔴 Full error:", error);
          return ok();
       }
 
+      console.log("🟢 FORGOT email sent request:", email);
       return ok();
    } catch (err) {
       console.error("Forgot-password server error:", err);
