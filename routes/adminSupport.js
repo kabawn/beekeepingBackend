@@ -53,19 +53,24 @@ router.post("/support/fix-email-and-reset", async (req, res) => {
 
 router.post("/support/set-temp-password", async (req, res) => {
    try {
-      const { userId, newPassword } = req.body;
+      const secret = process.env.ADMIN_SUPPORT_SECRET;
+      if (secret) {
+         const got = req.headers["x-admin-secret"];
+         if (got !== secret) {
+            return res.status(401).json({ ok: false, error: "Unauthorized" });
+         }
+      }
 
+      const { userId, newPassword } = req.body;
       if (!userId || !newPassword) {
          return res.status(400).json({ ok: false, error: "userId and newPassword are required" });
       }
 
-      const { data, error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
          password: newPassword,
       });
 
-      if (error) {
-         return res.status(400).json({ ok: false, error: error.message });
-      }
+      if (error) return res.status(400).json({ ok: false, error: error.message });
 
       return res.json({ ok: true, message: "Password updated successfully" });
    } catch (e) {
