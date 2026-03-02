@@ -101,9 +101,11 @@ router.get("/hives/:hiveId", authenticateUser, requirePro, async (req, res) => {
 
    try {
       const { rows } = await pool.query(
-         `SELECT e.*
+         `SELECT e.*,
+         h.hive_code
        FROM hive_evaluations e
        JOIN apiaries a ON a.apiary_id = e.apiary_id
+       JOIN hives h ON h.hive_id = e.hive_id
        WHERE e.hive_id = $1
          AND a.owner_user_id = $2
        ORDER BY e.eval_date DESC, e.hive_evaluation_id DESC`,
@@ -124,9 +126,11 @@ router.get("/apiaries/:apiaryId", authenticateUser, requirePro, async (req, res)
 
    try {
       const { rows } = await pool.query(
-         `SELECT e.*
+         `SELECT e.*,
+          h.hive_code
        FROM hive_evaluations e
        JOIN apiaries a ON a.apiary_id = e.apiary_id
+       JOIN hives h ON h.hive_id = e.hive_id
        WHERE e.apiary_id = $1
          AND a.owner_user_id = $2
        ORDER BY e.eval_date DESC, e.hive_id ASC`,
