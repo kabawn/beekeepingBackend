@@ -6,7 +6,11 @@ const supabase = require("../utils/supabaseClient");
 const authenticateUser = require("../middlewares/authMiddleware");
 
 const { fetchWeather } = require("../services/weather.service");
-const { buildWeatherInsights } = require("../services/weatherRules");
+const {
+   buildWeatherInsights,
+   buildWeeklyWeatherInsights,
+   buildDayDetails,
+} = require("../services/weatherRules");
 const { getCached, setCached } = require("../services/weatherCache");
 
 function parseLatLng(locationStr) {
@@ -20,6 +24,36 @@ function parseLatLng(locationStr) {
 
    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
    return { lat, lng };
+}
+
+async function getApiaryAndWeather(apiaryId, userId) {
+  const { data: apiary, error: apiErr } = await supabase
+    .from("apiaries")
+    .select("apiary_id, location, owner_user_id, apiary_name")
+    .eq("apiary_id", apiaryId)
+    .single();
+
+  if (apiErr || !apiary) {
+    const err = new Error(apiErr?.message || "Apiary not found");
+    err.status = 404;
+    throw err;
+  }
+
+  if (apiary.owner_user_id && userId && apiary.owner_user_id !== userId) {
+    const err = new Error("Forbidden");
+    err.status = 403;
+    throw err;
+  }
+
+  const coords = parseLatLng(apiary.location);
+  if (!coords) {
+    const err = new Error("Invalid location format. Expected 'lat,lng'");
+    err.status = 400;
+    throw err;
+  }
+
+  const weather = await fetchWeather(coords.lat, coords.lng);
+  return { apiary, coords, weather };
 }
 
 // GET /api/weather/:apiaryId
@@ -77,6 +111,78 @@ router.get("/:apiaryId", authenticateUser, async (req, res) => {
       console.error("Weather endpoint error:", e);
       return res.status(500).json({ error: "Internal server error" });
    }
+});
+
+router.get("/:apiaryId/weekly", authenticateUser, async (req, res) => {
+  try {
+    const apiaryId = Number(req.params.apiaryId);
+    if (!Number.isFinite(apiaryId)) {
+      return res.status(400).json({ error: "Invalid apiaryId" });
+    }
+
+    const userId = req.user?.id || "anonymous";
+    const cacheKey = `weather:weekly:apiary:${apiaryId}:user:${userId}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+
+    const { apiary, weather } = await getApiaryAndWeather(apiaryId, req.user?.id);
+    const weekly = buildWeeklyWeatherInsights(weather);
+
+    const payload = {
+      apiary_id: apiary.apiary_id,
+      apiary_name: apiary.apiary_name || null,
+      location: apiary.location,
+      fetched_at: new Date().toISOString(),
+      days: weekly.days,
+    };
+
+    setCached(cacheKey, payload, 30 * 60 * 1000);
+    return res.json(payload);
+  } catch (e) {
+    console.error("Weekly weather endpoint error:", e);
+    return res.status(e.status || 500).json({ error: e.message || "Internal server error" });
+  }
+});
+
+router.get("/:apiaryId/day", authenticateUser, async (req, res) => {
+  try {
+    const apiaryId = Number(req.params.apiaryId);
+    const { date } = req.query;
+
+    if (!Number.isFinite(apiaryId)) {
+      return res.status(400).json({ error: "Invalid apiaryId" });
+    }
+
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+      return res.status(400).json({ error: "Invalid date. Expected YYYY-MM-DD" });
+    }
+
+    const userId = req.user?.id || "anonymous";
+    const cacheKey = `weather:day:apiary:${apiaryId}:date:${date}:user:${userId}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+
+    const { apiary, weather } = await getApiaryAndWeather(apiaryId, req.user?.id);
+    const details = buildDayDetails(weather, String(date));
+
+    if (!details) {
+      return res.status(404).json({ error: "Date not found in forecast" });
+    }
+
+    const payload = {
+      apiary_id: apiary.apiary_id,
+      apiary_name: apiary.apiary_name || null,
+      location: apiary.location,
+      fetched_at: new Date().toISOString(),
+      ...details,
+    };
+
+    setCached(cacheKey, payload, 30 * 60 * 1000);
+    return res.json(payload);
+  } catch (e) {
+    console.error("Day weather endpoint error:", e);
+    return res.status(e.status || 500).json({ error: e.message || "Internal server error" });
+  }
 });
 
 module.exports = router;
