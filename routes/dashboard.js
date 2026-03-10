@@ -46,23 +46,29 @@ router.get("/overview", authenticateUser, async (req, res) => {
       console.error("Alerts count error:", alertsErr);
       }
 
-      // harvests (SUM net_honey_kg)
+      // harvests (SUM net_honey_kg since Jan 1 current year)
+      const now = new Date();
+      const firstDayOfYear = new Date(now.getFullYear(), 0, 1)
+      .toISOString()
+      .split("T")[0];
+
       const { data: harvestRows, error: harvestErr } = await supabase
       .from("harvests")
       .select("net_honey_kg")
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .gte("harvest_date", firstDayOfYear);
 
       if (harvestErr) {
       console.error("Harvests sum error:", harvestErr);
       }
 
       const harvestsKg =
-      (harvestRows || []).reduce((sum, r) => sum + (Number(r.net_honey_kg) || 0), 0);
+      (harvestRows || []).reduce(
+         (sum, r) => sum + (Number(r.net_honey_kg) || 0),
+         0
+      );
 
-      // arrondi 2 décimales (optionnel)
       const harvestsTotalKg = Math.round(harvestsKg * 100) / 100;
-
-      console.log("🧠 dashboard overview ms =", Date.now() - t0);
 
       res.json({
          apiaries: apiariesCount || 0,
