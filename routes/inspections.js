@@ -849,4 +849,59 @@ router.delete("/:id", authenticateUser, async (req, res) => {
    }
 });
 
+// ----------------------------
+// ✅ GET /inspections/apiary/:apiary_id
+// ----------------------------
+router.get("/apiary/:apiary_id", authenticateUser, async (req, res) => {
+  try {
+    const apiaryId = req.params.apiary_id;
+
+    const { data, error } = await supabase
+      .from("hive_inspections")
+      .select(`
+        inspection_id,
+        hive_id,
+        inspection_date,
+        revisit_needed,
+        revisit_date,
+        notes,
+        hives (
+          hive_code,
+          apiary_id,
+          apiaries (
+            apiary_name,
+            owner_user_id
+          )
+        )
+      `)
+      .eq("user_id", req.user.id) // 🔐 sécurité utilisateur
+      .eq("hives.apiary_id", apiaryId)
+      .order("inspection_date", { ascending: false });
+
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(400).json({ error: error.message });
+    }
+
+    // 🔹 On reformate proprement la réponse
+    const inspections = (data || []).map((row) => ({
+      inspection_id: row.inspection_id,
+      hive_id: row.hive_id,
+      hive_code: row.hives?.hive_code || null,
+      inspection_date: row.inspection_date,
+      revisit_needed: row.revisit_needed,
+      revisit_date: row.revisit_date,
+      note: row.notes,
+      apiary_id: row.hives?.apiary_id || null,
+      apiary_name: row.hives?.apiaries?.apiary_name || null,
+    }));
+
+    return res.status(200).json({ inspections });
+
+  } catch (err) {
+    console.error("Unexpected error in /apiary inspections:", err);
+    return res.status(500).json({ error: "Unexpected server error" });
+  }
+});
+
 module.exports = router;
