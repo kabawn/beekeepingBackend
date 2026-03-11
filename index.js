@@ -64,6 +64,7 @@ const adminSupportRouter = require("./routes/adminSupport");
 const diagRouter = require("./routes/diag");
 const apiaryChecklistRouter = require("./routes/apiaryChecklist");
 const weatherRouter = require("./routes/weather");
+const floraRoutes = require("./routes/flora");
 
 
 // Mount routers
@@ -107,6 +108,8 @@ app.use("/api", adminSupportRouter);
 app.use("/api/diag", diagRouter);
 app.use("/api/apiary-checklist", apiaryChecklistRouter);
 app.use("/api/weather", require("./routes/weather"));
+app.use("/api/flora", floraRoutes);
+
 // ✅ Start server
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
