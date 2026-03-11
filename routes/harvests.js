@@ -154,7 +154,7 @@ router.get("/", async (req, res) => {
       s.public_key
     FROM harvests h
     JOIN supers s ON s.super_id = h.super_id
-    LEFT JOIN apiaries a ON a.apiary_id = h.apiary_id
+    LEFT JOIN apiaries a ON a.apiary_id = s.apiary_id
     WHERE h.user_id = $1
     ORDER BY h.id DESC
   `;
@@ -355,15 +355,26 @@ router.get("/summary", async (req, res) => {
       ORDER BY net_total_kg DESC
     `;
 
-    const [totals, perSuper] = await Promise.all([
+    const perMonthSql = `
+      SELECT
+        TO_CHAR(h.harvest_date, 'YYYY-MM') AS month,
+        COALESCE(SUM(h.net_honey_kg)::float8, 0) AS total_kg
+      FROM harvests h
+      ${whereSql}
+      GROUP BY month
+      ORDER BY month ASC
+    `;
+    const [totals, perSuper, perMonth] = await Promise.all([
       pool.query(totalSql, params),
       pool.query(perSuperSql, params),
+      pool.query(perMonthSql, params),
     ]);
 
     res.json({
       range: { from: req.query.from || null, to: req.query.to || null },
       totals: totals.rows[0],
       perSuper: perSuper.rows,
+      perMonth: perMonth.rows,
     });
   } catch (e) {
     console.error("Error building summary:", e);
