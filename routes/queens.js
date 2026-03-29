@@ -21,6 +21,22 @@ function getOpaliteColorFromSeason(season) {
    return null;
 }
 
+function normalizeQueenYear(queenYear, graftingDate) {
+   if (queenYear !== undefined && queenYear !== null && queenYear !== "") {
+      const parsed = Number(queenYear);
+      if (Number.isInteger(parsed)) return parsed;
+   }
+
+   if (graftingDate) {
+      const parsedDate = new Date(graftingDate);
+      if (!Number.isNaN(parsedDate.getTime())) {
+         return parsedDate.getFullYear();
+      }
+   }
+
+   return null;
+}
+
 // ✅ Generate next queen code per user (safe, no count)
 async function generateNextQueenCodeForUser(userId) {
    const { data: last, error: lastErr } = await supabase
@@ -63,7 +79,6 @@ async function insertQueenWithRetry({ userId, queenRowBase, maxAttempts = 3 }) {
       lastError = error;
 
       // If unique violation on (owner_user_id, queen_code) → retry
-      // Supabase/Postgres usually uses code "23505" for unique_violation
       const pgCode = error?.code;
       const msg = String(error?.message || "").toLowerCase();
 
@@ -81,18 +96,31 @@ async function insertQueenWithRetry({ userId, queenRowBase, maxAttempts = 3 }) {
 
 /**
  * =========================================================
- * 👑 إنشاء ملكة جديدة
+ * 👑 Create queen
  * POST /queens
- * body: { grafting_date, strain_name, opalite_color, expected_traits, hive_id, forceReplace? }
+ * body: {
+ *   grafting_date,
+ *   strain_name,
+ *   strain_id,
+ *   queen_year,
+ *   opalite_color,
+ *   expected_traits,
+ *   hive_id,
+ *   source_type,
+ *   forceReplace?
+ * }
  * =========================================================
  */
 router.post("/", authenticateUser, async (req, res) => {
    const {
       grafting_date,
       strain_name,
+      strain_id,
+      queen_year,
       opalite_color,
       expected_traits,
       hive_id,
+      source_type = "manual",
       forceReplace = false,
    } = req.body;
 
@@ -133,12 +161,17 @@ router.post("/", authenticateUser, async (req, res) => {
          }
       }
 
+      const normalizedQueenYear = normalizeQueenYear(queen_year, grafting_date);
+
       const queenRowBase = {
-         grafting_date,
-         strain_name,
-         opalite_color,
-         expected_traits,
+         grafting_date: grafting_date || null,
+         strain_name: strain_name || null,
+         strain_id: strain_id || null,
+         queen_year: normalizedQueenYear,
+         opalite_color: opalite_color || null,
+         expected_traits: expected_traits || null,
          hive_id: hive_id || null,
+         source_type: source_type || "manual",
       };
 
       const created = await insertQueenWithRetry({ userId, queenRowBase, maxAttempts: 3 });
@@ -181,12 +214,14 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
       const sourceType = payload.type || "queen_cell";
       const cellLot = payload.cell_lot || payload.full_lot_number || payload.full_lot || null;
       const strainName = payload.strain || payload.strain_name || null;
+      const strainId = payload.strain_id || null;
       const graftingDate = payload.graft_date || null;
 
       const parents = payload.parents || null;
       const grandparents = payload.grandparents || null;
 
       const season = payload.season || (graftingDate ? new Date(graftingDate).getFullYear() : null);
+      const queenYear = normalizeQueenYear(payload.queen_year, graftingDate) || season || null;
       const opaliteColor = getOpaliteColorFromSeason(season);
 
       // 2) Check if hive already has a queen for this user
@@ -226,6 +261,8 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
       const queenRowBase = {
          grafting_date: graftingDate,
          strain_name: strainName,
+         strain_id: strainId,
+         queen_year: queenYear,
          opalite_color: opaliteColor,
          expected_traits: null,
          hive_id,
@@ -418,8 +455,44 @@ router.get("/:queen_id", authenticateUser, async (req, res) => {
  */
 router.patch("/:queen_id", authenticateUser, async (req, res) => {
    const { queen_id } = req.params;
-   const updateFields = req.body;
    const userId = req.user.id;
+
+   const allowedFields = [
+      "grafting_date",
+      "strain_name",
+      "strain_id",
+      "opalite_color",
+      "expected_traits",
+      "queen_year",
+      "source_type",
+      "is_alive",
+      "hive_id",
+   ];
+
+   const updateFields = Object.fromEntries(
+      Object.entries(req.body || {}).filter(([key]) => allowedFields.includes(key)),
+   );
+
+   if (Object.keys(updateFields).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+   }
+
+   if ("queen_year" in updateFields) {
+      updateFields.queen_year = normalizeQueenYear(
+         updateFields.queen_year,
+         updateFields.grafting_date,
+      );
+   } else if ("grafting_date" in updateFields && updateFields.grafting_date) {
+      updateFields.queen_year = normalizeQueenYear(null, updateFields.grafting_date);
+   }
+
+   if ("strain_id" in updateFields && !updateFields.strain_id) {
+      updateFields.strain_id = null;
+   }
+
+   if ("strain_name" in updateFields && !updateFields.strain_name) {
+      updateFields.strain_name = null;
+   }
 
    try {
       const { data, error } = await supabase

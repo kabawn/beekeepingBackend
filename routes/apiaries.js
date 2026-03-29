@@ -97,8 +97,9 @@ router.post("/", authenticateUser, async (req, res) => {
       department,
       land_owner_name,
       phone,
-      main_production, // string
-      productions, // array of strings (optional)
+      main_production,
+      productions,
+      is_favorite,
    } = req.body;
 
    try {
@@ -600,19 +601,33 @@ router.put("/:id", authenticateUser, async (req, res) => {
    try {
       const safeMain = (main_production || "honey").toLowerCase();
 
+      const safeFavorite = typeof is_favorite === "boolean" ? is_favorite : null;
+
       const result = await pool.query(
          `UPDATE apiaries
-          SET apiary_name = $1,
-              location = $2,
-              commune = $3,
-              department = $4,
-              land_owner_name = $5,
-              phone = $6,
-              main_production = $7
-          WHERE apiary_id = $8
-          AND owner_user_id = $9
-          RETURNING *`,
-         [apiary_name, location, commune, department, land_owner_name, phone, safeMain, id, userId],
+    SET apiary_name = $1,
+        location = $2,
+        commune = $3,
+        department = $4,
+        land_owner_name = $5,
+        phone = $6,
+        main_production = $7,
+        is_favorite = COALESCE($8, is_favorite)
+    WHERE apiary_id = $9
+    AND owner_user_id = $10
+    RETURNING *`,
+         [
+            apiary_name,
+            location,
+            commune,
+            department,
+            land_owner_name,
+            phone,
+            safeMain,
+            safeFavorite,
+            id,
+            userId,
+         ],
       );
 
       if (result.rows.length === 0) {
@@ -659,6 +674,36 @@ router.put("/:id", authenticateUser, async (req, res) => {
    } catch (error) {
       console.error("Error updating apiary:", error);
       res.status(500).json({ error: "Server error while updating apiary" });
+   }
+});
+
+router.patch("/:id/favorite", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+   const userId = req.user.id;
+   const { is_favorite } = req.body;
+
+   if (typeof is_favorite !== "boolean") {
+      return res.status(400).json({ error: "is_favorite must be a boolean" });
+   }
+
+   try {
+      const result = await pool.query(
+         `UPDATE apiaries
+          SET is_favorite = $1
+          WHERE apiary_id = $2
+            AND owner_user_id = $3
+          RETURNING *`,
+         [is_favorite, id, userId],
+      );
+
+      if (result.rows.length === 0) {
+         return res.status(404).json({ error: "Apiary not found" });
+      }
+
+      return res.json({ apiary: result.rows[0] });
+   } catch (error) {
+      console.error("Error updating apiary favorite:", error);
+      return res.status(500).json({ error: "Server error while updating apiary favorite" });
    }
 });
 
