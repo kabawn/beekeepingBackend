@@ -7,7 +7,7 @@ const PDFDocument = require("pdfkit");
 const QRCode = require("qrcode");
 const path = require("path");
 const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
-const DISABLE_FREE_APIARY_LIMIT = true;
+const DISABLE_FREE_APIARY_LIMIT = false;
 
 const fontArabic = path.join(
    __dirname,

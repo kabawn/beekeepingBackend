@@ -64,6 +64,28 @@ async function generateNextHiveCodeForUser(userId) {
    return `${String(left).padStart(2, "0")}-${String(right).padStart(2, "0")}`;
 }
 
+async function countUserHives(userId) {
+   const { data: apiaries, error: apiErr } = await supabase
+      .from("apiaries")
+      .select("apiary_id")
+      .eq("owner_user_id", userId);
+
+   if (apiErr) throw new Error(apiErr.message);
+
+   const apiaryIds = (apiaries || []).map((a) => a.apiary_id);
+
+   if (apiaryIds.length === 0) return 0;
+
+   const { count, error: hiveErr } = await supabase
+      .from("hives")
+      .select("hive_id", { count: "exact", head: true })
+      .in("apiary_id", apiaryIds);
+
+   if (hiveErr) throw new Error(hiveErr.message);
+
+   return count || 0;
+}
+
 // ✅ Ensure apiary belongs to current user (NUMERIC + STATUS)
 async function assertApiaryOwnership(apiaryId, userId) {
    const apiaryIdNum = Number(apiaryId);
@@ -179,6 +201,36 @@ async function getHiveByPublicKeyIfOwned(
  */
 router.post("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
+
+   // ✅ subscription + hive limit
+   const { data: subscription, error: subErr } = await supabase
+      .from("subscriptions")
+      .select("plan_type, is_active, expires_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+   if (subErr) {
+      return res.status(400).json({ error: subErr.message });
+   }
+
+   const now = new Date();
+   const expiresAt = subscription?.expires_at ? new Date(subscription.expires_at) : null;
+   const isExpired = expiresAt ? expiresAt < now : false;
+   const isPremium =
+      subscription?.plan_type === "premium" && subscription?.is_active === true && !isExpired;
+
+   if (!isPremium) {
+      const hiveCount = await countUserHives(userId);
+
+      if (hiveCount >= 10) {
+         return res.status(403).json({
+            error: "Free users can only create up to 10 hives. Please upgrade your plan.",
+            code: "HIVE_LIMIT_REACHED",
+            limit: 10,
+            currentCount: hiveCount,
+         });
+      }
+   }
 
    const { hive_type, hive_purpose, empty_weight, frame_capacity, apiary_id, public_key } =
       req.body;
