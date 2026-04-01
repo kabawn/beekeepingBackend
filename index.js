@@ -67,7 +67,7 @@ const weatherRouter = require("./routes/weather");
 const floraRoutes = require("./routes/flora");
 const varroaTestsRoutes = require("./routes/varroaTests");
 const subscriptionRouter = require("./routes/subscription");
-
+const billingRouter = require("./routes/billing");
 // Mount routers
 app.use("/api/apiaries", apiariesRouter);
 app.use("/api/hives", hivesRouter);
@@ -112,6 +112,7 @@ app.use("/api/weather", require("./routes/weather"));
 app.use("/api/flora", floraRoutes);
 app.use("/api/varroa-tests", varroaTestsRoutes);
 app.use("/api", subscriptionRouter);
+app.use("/api/billing", billingRouter);
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
 
