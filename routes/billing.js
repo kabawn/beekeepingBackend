@@ -86,4 +86,65 @@ router.post("/verify", authenticateUser, async (req, res) => {
    }
 });
 
+router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const { product_id } = req.body;
+
+   try {
+      if (!product_id) {
+         return res.status(400).json({
+            error: "product_id is required",
+         });
+      }
+
+      if (product_id !== "beestats_premium_monthly") {
+         return res.status(400).json({
+            error: "Unknown product_id",
+         });
+      }
+
+      const now = new Date();
+      const expiresAt = new Date(now);
+      expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+      const result = await pool.query(
+         `
+         UPDATE subscriptions
+         SET
+            plan_type = 'premium',
+            is_active = TRUE,
+            started_at = $1,
+            expires_at = $2,
+            provider = 'google',
+            provider_product_id = $3,
+            status = 'active',
+            auto_renew = TRUE,
+            last_verified_at = $1
+         WHERE user_id = $4
+         RETURNING *
+         `,
+         [now, expiresAt, product_id, userId],
+      );
+
+      if (result.rows.length === 0) {
+         return res.status(404).json({
+            error: "Subscription row not found for this user",
+         });
+      }
+
+      const entitlements = await getUserEntitlements(userId);
+
+      return res.json({
+         message: "Subscription synced successfully",
+         subscription: result.rows[0],
+         entitlements,
+      });
+   } catch (error) {
+      console.error("POST /billing/sync-revenuecat error:", error);
+      return res.status(500).json({
+         error: "Failed to sync RevenueCat subscription",
+      });
+   }
+});
+
 module.exports = router;
