@@ -90,14 +90,20 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
    const userId = req.user.id;
    const { product_id } = req.body;
 
+   console.log("======== SYNC REVENUECAT START ========");
+   console.log("User ID:", userId);
+   console.log("Body:", req.body);
+
    try {
       if (!product_id) {
+         console.log("❌ ERROR: product_id missing");
          return res.status(400).json({
             error: "product_id is required",
          });
       }
 
       if (product_id !== "beestats_premium_monthly") {
+         console.log("❌ ERROR: Unknown product_id:", product_id);
          return res.status(400).json({
             error: "Unknown product_id",
          });
@@ -106,6 +112,13 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
       const now = new Date();
       const expiresAt = new Date(now);
       expiresAt.setMonth(expiresAt.getMonth() + 1);
+
+      console.log("⏳ Updating subscription...");
+      console.log("New values:", {
+         plan_type: "premium",
+         started_at: now,
+         expires_at: expiresAt,
+      });
 
       const result = await pool.query(
          `
@@ -126,13 +139,22 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
          [now, expiresAt, product_id, userId],
       );
 
+      console.log("📊 UPDATE RESULT rows:", result.rows.length);
+
       if (result.rows.length === 0) {
+         console.log("❌ ERROR: No subscription row found for user:", userId);
          return res.status(404).json({
             error: "Subscription row not found for this user",
          });
       }
 
+      console.log("✅ UPDATED SUBSCRIPTION:", result.rows[0]);
+
       const entitlements = await getUserEntitlements(userId);
+
+      console.log("🎯 ENTITLEMENTS AFTER UPDATE:", entitlements);
+
+      console.log("======== SYNC REVENUECAT SUCCESS ========");
 
       return res.json({
          message: "Subscription synced successfully",
@@ -140,11 +162,12 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
          entitlements,
       });
    } catch (error) {
-      console.error("POST /billing/sync-revenuecat error:", error);
+      console.error("🔥 SYNC ERROR:", error);
+      console.log("======== SYNC REVENUECAT FAILED ========");
+
       return res.status(500).json({
          error: "Failed to sync RevenueCat subscription",
       });
    }
 });
-
 module.exports = router;
