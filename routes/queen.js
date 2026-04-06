@@ -1,6 +1,7 @@
 // routes/queen.js
 const express = require("express");
 const router = express.Router();
+const requireFeature = require("../middlewares/requireFeature");
 const pool = require("../db");
 const authenticateUser = require("../middlewares/authMiddleware");
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
@@ -19,7 +20,7 @@ const {
 
 // All routes require auth
 router.use(authenticateUser);
-
+router.use(requireFeature("queenBreeding"));
 // ---------------- SETTINGS ----------------
 
 // GET /queen/settings

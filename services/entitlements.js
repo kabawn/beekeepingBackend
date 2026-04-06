@@ -28,6 +28,7 @@ const PLAN_ENTITLEMENTS = {
          varroa: {
             enabled: true,
          },
+         queenBreeding: { enabled: false },
       },
    },
 
@@ -60,6 +61,7 @@ const PLAN_ENTITLEMENTS = {
          varroa: {
             enabled: true,
          },
+         queenBreeding: { enabled: true },
       },
    },
 };
