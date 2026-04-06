@@ -174,7 +174,8 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
 router.post("/webhook/revenuecat", async (req, res) => {
    try {
       const authHeader = req.headers["authorization"];
-
+      console.log("AUTH HEADER RECEIVED =", req.headers["authorization"]);
+      console.log("EXPECTED AUTH HEADER =", `Bearer ${process.env.REVENUECAT_WEBHOOK_SECRET}`);
       if (authHeader !== `Bearer ${process.env.REVENUECAT_WEBHOOK_SECRET}`) {
          return res.status(401).json({ error: "Unauthorized webhook" });
       }
