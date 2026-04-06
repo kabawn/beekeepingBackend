@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../utils/supabaseClient");
 const rateLimit = require("express-rate-limit");
-
+const authenticateUser = require("../middlewares/authMiddleware");
 /* ------------------------- Helpers ------------------------- */
 function mapLoginError(err) {
    const raw = String(err?.message || "").toLowerCase();
@@ -262,6 +262,25 @@ router.post("/login", loginLimiter, async (req, res) => {
             code: "SERVER_ERROR",
             message: "Unexpected server error. Try again.",
          },
+      });
+   }
+});
+
+router.get("/me", authenticateUser, async (req, res) => {
+   try {
+      const user = req.user;
+
+      return res.status(200).json({
+         user: {
+            id: user.id,
+            email: user.email,
+         },
+         plan: user.plan_type, // 🔥 جاهزة من middleware
+      });
+   } catch (err) {
+      console.error("GET /auth/me error:", err);
+      return res.status(500).json({
+         error: "Failed to fetch user",
       });
    }
 });
