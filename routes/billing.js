@@ -170,4 +170,147 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
       });
    }
 });
+
+router.post("/webhook/revenuecat", async (req, res) => {
+   try {
+      const authHeader = req.headers["authorization"];
+
+      if (authHeader !== `Bearer ${process.env.REVENUECAT_WEBHOOK_SECRET}`) {
+         return res.status(401).json({ error: "Unauthorized webhook" });
+      }
+
+      const event = req.body?.event;
+
+      if (!event) {
+         return res.status(400).json({ error: "Missing event payload" });
+      }
+
+      const {
+         type,
+         app_user_id,
+         product_id,
+         transaction_id,
+         original_transaction_id,
+         expiration_at_ms,
+      } = event;
+
+      if (!app_user_id) {
+         return res.status(400).json({ error: "Missing app_user_id" });
+      }
+
+      const expiresAt = expiration_at_ms ? new Date(Number(expiration_at_ms)) : null;
+      const now = new Date();
+
+      // لاحقًا لو أضفت أكثر من منتج، هنا توسع الـ mapping
+      const isPremiumProduct = product_id === "beestats_premium_monthly";
+
+      if (!isPremiumProduct) {
+         return res.status(200).json({ message: "Ignored non-premium product" });
+      }
+
+      if (type === "INITIAL_PURCHASE" || type === "RENEWAL") {
+         const result = await pool.query(
+            `
+            UPDATE subscriptions
+            SET
+               plan_type = 'premium',
+               is_active = TRUE,
+               provider = 'google',
+               provider_product_id = $1,
+               provider_transaction_id = $2,
+               status = 'active',
+               auto_renew = TRUE,
+               started_at = COALESCE(started_at, $3),
+               expires_at = $4,
+               last_verified_at = $3
+            WHERE user_id = $5
+            RETURNING *
+            `,
+            [
+               product_id,
+               transaction_id || original_transaction_id || null,
+               now,
+               expiresAt,
+               app_user_id,
+            ],
+         );
+
+         return res.status(200).json({
+            message: `${type} processed`,
+            subscription: result.rows[0] || null,
+         });
+      }
+
+      if (type === "CANCELLATION") {
+         const result = await pool.query(
+            `
+            UPDATE subscriptions
+            SET
+               provider = 'google',
+               provider_product_id = $1,
+               provider_transaction_id = $2,
+               status = 'canceled',
+               auto_renew = FALSE,
+               last_verified_at = $3,
+               expires_at = COALESCE($4, expires_at)
+            WHERE user_id = $5
+            RETURNING *
+            `,
+            [
+               product_id,
+               transaction_id || original_transaction_id || null,
+               now,
+               expiresAt,
+               app_user_id,
+            ],
+         );
+
+         return res.status(200).json({
+            message: "CANCELLATION processed",
+            subscription: result.rows[0] || null,
+         });
+      }
+
+      if (type === "EXPIRATION") {
+         const result = await pool.query(
+            `
+            UPDATE subscriptions
+            SET
+               plan_type = 'free',
+               is_active = FALSE,
+               provider = 'google',
+               provider_product_id = $1,
+               provider_transaction_id = $2,
+               status = 'expired',
+               auto_renew = FALSE,
+               last_verified_at = $3,
+               expires_at = COALESCE($4, expires_at)
+            WHERE user_id = $5
+            RETURNING *
+            `,
+            [
+               product_id,
+               transaction_id || original_transaction_id || null,
+               now,
+               expiresAt,
+               app_user_id,
+            ],
+         );
+
+         return res.status(200).json({
+            message: "EXPIRATION processed",
+            subscription: result.rows[0] || null,
+         });
+      }
+
+      return res.status(200).json({
+         message: `Ignored event type: ${type}`,
+      });
+   } catch (error) {
+      console.error("POST /billing/webhook/revenuecat error:", error);
+      return res.status(500).json({
+         error: "Failed to process RevenueCat webhook",
+      });
+   }
+});
 module.exports = router;
