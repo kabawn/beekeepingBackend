@@ -82,15 +82,17 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
 router.post("/webhook/revenuecat", async (req, res) => {
    try {
       const authHeader = req.headers["authorization"];
-      const expectedAuthHeader = `Bearer ${process.env.REVENUECAT_WEBHOOK_SECRET}`;
+      const expectedAuthHeader = process.env.REVENUECAT_WEBHOOK_SECRET;
 
-      if (!process.env.REVENUECAT_WEBHOOK_SECRET) {
+      if (!expectedAuthHeader) {
          console.error("REVENUECAT_WEBHOOK_SECRET is missing");
          return res.status(500).json({ error: "Webhook secret is not configured" });
       }
 
-      if (authHeader !== expectedAuthHeader) {
-         return res.status(401).json({ error: "Unauthorized webhook" });
+      if (authHeader !== expectedAuthHeader && authHeader !== `Bearer ${expectedAuthHeader}`) {
+         return res.status(401).json({
+            error: "Unauthorized webhook",
+         });
       }
 
       const event = req.body?.event;
