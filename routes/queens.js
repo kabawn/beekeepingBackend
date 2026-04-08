@@ -287,6 +287,126 @@ router.post("/from-cell", authenticateUser, async (req, res) => {
 
 /**
  * =========================================================
+ * 🔎 Search apiaries by queen strain
+ * GET /queens/search-by-strain?q=T406
+ * =========================================================
+ */
+router.get("/search-by-strain", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+   const q = String(req.query.q || "").trim();
+
+   if (!q) {
+      return res.status(400).json({ error: "Query parameter q is required" });
+   }
+
+   try {
+      // 1) Find matching queens for this user
+      const { data: queens, error: queensError } = await supabase
+         .from("queens")
+         .select("queen_id, queen_code, strain_name, queen_year, hive_id")
+         .eq("owner_user_id", userId)
+         .eq("is_alive", true)
+         .not("hive_id", "is", null)
+         .ilike("strain_name", `%${q}%`)
+         .order("strain_name", { ascending: true });
+
+      if (queensError) {
+         console.error("Error searching queens by strain:", queensError);
+         return res.status(500).json({ error: "Failed to search queens by strain" });
+      }
+
+      if (!queens || queens.length === 0) {
+         return res.status(200).json({
+            query: q,
+            total_queens: 0,
+            apiaries: [],
+         });
+      }
+
+      const hiveIds = [...new Set(queens.map((q) => q.hive_id).filter(Boolean))];
+
+      // 2) Load hives
+      const { data: hives, error: hivesError } = await supabase
+         .from("hives")
+         .select("hive_id, hive_code, apiary_id")
+         .in("hive_id", hiveIds);
+
+      if (hivesError) {
+         console.error("Error loading hives for strain search:", hivesError);
+         return res.status(500).json({ error: "Failed to load hives" });
+      }
+
+      const apiaryIds = [...new Set((hives || []).map((h) => h.apiary_id).filter(Boolean))];
+
+      // 3) Load apiaries
+      const { data: apiaries, error: apiariesError } = await supabase
+         .from("apiaries")
+         .select("apiary_id, apiary_name, owner_user_id")
+         .eq("owner_user_id", userId)
+         .in("apiary_id", apiaryIds);
+
+      if (apiariesError) {
+         console.error("Error loading apiaries for strain search:", apiariesError);
+         return res.status(500).json({ error: "Failed to load apiaries" });
+      }
+
+      // 4) Build lookup maps
+      const hiveMap = new Map((hives || []).map((h) => [String(h.hive_id), h]));
+      const apiaryMap = new Map((apiaries || []).map((a) => [String(a.apiary_id), a]));
+
+      // 5) Group by apiary
+      const grouped = new Map();
+
+      for (const queen of queens) {
+         const hive = hiveMap.get(String(queen.hive_id));
+         if (!hive) continue;
+
+         const apiary = apiaryMap.get(String(hive.apiary_id));
+         if (!apiary) continue;
+
+         const apiaryKey = String(apiary.apiary_id);
+
+         if (!grouped.has(apiaryKey)) {
+            grouped.set(apiaryKey, {
+               apiary_id: apiary.apiary_id,
+               apiary_name: apiary.apiary_name,
+               queens_count: 0,
+               hives: [],
+            });
+         }
+
+         const bucket = grouped.get(apiaryKey);
+
+         bucket.queens_count += 1;
+         bucket.hives.push({
+            hive_id: hive.hive_id,
+            hive_code: hive.hive_code,
+            queen_id: queen.queen_id,
+            queen_code: queen.queen_code,
+            strain_name: queen.strain_name,
+            queen_year: queen.queen_year,
+         });
+      }
+
+      const results = Array.from(grouped.values()).sort((a, b) =>
+         String(a.apiary_name || "").localeCompare(String(b.apiary_name || ""), "fr", {
+            sensitivity: "base",
+         }),
+      );
+
+      return res.status(200).json({
+         query: q,
+         total_queens: queens.length,
+         apiaries: results,
+      });
+   } catch (err) {
+      console.error("Unexpected error in GET /queens/search-by-strain:", err);
+      return res.status(500).json({ error: "Unexpected server error" });
+   }
+});
+
+/**
+ * =========================================================
  * 🔍 Get current queen for a hive
  * GET /queens/by-hive/:hive_id
  * =========================================================
