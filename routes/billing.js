@@ -18,8 +18,8 @@ function addOneMonth(date = new Date()) {
 // ----------------------------------------------------
 router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
    const userId = req.user.id;
-   const { product_id } = req.body;
-
+   const rawProductId = req.body.product_id;
+   const product_id = rawProductId ? rawProductId.split(":")[0] : null;
    try {
       if (!product_id) {
          return res.status(400).json({
