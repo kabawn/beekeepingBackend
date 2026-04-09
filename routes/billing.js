@@ -109,7 +109,9 @@ router.post("/webhook/revenuecat", async (req, res) => {
          original_transaction_id,
          expiration_at_ms,
       } = event;
-
+      console.log("WEBHOOK TYPE:", type);
+      console.log("WEBHOOK APP USER ID:", app_user_id);
+      console.log("WEBHOOK PRODUCT ID:", product_id);
       if (!app_user_id) {
          return res.status(400).json({ error: "Missing app_user_id" });
       }
@@ -142,7 +144,8 @@ router.post("/webhook/revenuecat", async (req, res) => {
             `,
             [GOOGLE_PROVIDER, product_id, providerTransactionId, now, expiresAt, app_user_id],
          );
-
+         console.log("WEBHOOK UPDATE ROWS:", result.rows.length);
+         console.log("WEBHOOK UPDATED SUBSCRIPTION:", result.rows[0] || null);
          return res.status(200).json({
             message: `${type} processed`,
             subscription: result.rows[0] || null,
