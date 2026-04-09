@@ -104,14 +104,23 @@ router.post("/webhook/revenuecat", async (req, res) => {
       const {
          type,
          app_user_id,
-         product_id,
+         product_id: rawProductId,
          transaction_id,
          original_transaction_id,
          expiration_at_ms,
       } = event;
+
+      const product_id = rawProductId ? rawProductId.split(":")[0] : null;
+
       console.log("WEBHOOK TYPE:", type);
       console.log("WEBHOOK APP USER ID:", app_user_id);
-      console.log("WEBHOOK PRODUCT ID:", product_id);
+      console.log("WEBHOOK RAW PRODUCT ID:", rawProductId);
+      console.log("WEBHOOK NORMALIZED PRODUCT ID:", product_id);
+
+      if (type === "TRANSFER") {
+         return res.status(200).json({ message: "Ignored TRANSFER event" });
+      }
+
       if (!app_user_id) {
          return res.status(400).json({ error: "Missing app_user_id" });
       }
