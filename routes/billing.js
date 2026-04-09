@@ -34,24 +34,24 @@ router.post("/sync-revenuecat", authenticateUser, async (req, res) => {
       }
 
       const now = new Date();
-      const expiresAt = addOneMonth(now);
+      const expiresAt = null;
 
       const result = await pool.query(
          `
-         UPDATE subscriptions
-         SET
-            plan_type = 'premium',
-            is_active = TRUE,
-            started_at = $1,
-            expires_at = $2,
-            provider = $3,
-            provider_product_id = $4,
-            status = 'active',
-            auto_renew = TRUE,
-            last_verified_at = $1
-         WHERE user_id = $5
-         RETURNING *
-         `,
+   UPDATE subscriptions
+   SET
+      plan_type = 'premium',
+      is_active = TRUE,
+      started_at = COALESCE(started_at, $1),
+      expires_at = COALESCE(expires_at, $2),
+      provider = $3,
+      provider_product_id = $4,
+      status = 'active',
+      auto_renew = TRUE,
+      last_verified_at = $1
+   WHERE user_id = $5
+   RETURNING *
+   `,
          [now, expiresAt, GOOGLE_PROVIDER, product_id, userId],
       );
 
