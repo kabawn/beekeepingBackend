@@ -8,7 +8,9 @@ const QRCode = require("qrcode");
 const path = require("path");
 const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
 const DISABLE_FREE_APIARY_LIMIT = false;
-
+const DEFAULT_FLIGHT_RANGE_KM = 3.0;
+const MIN_FLIGHT_RANGE_KM = 0.5;
+const MAX_FLIGHT_RANGE_KM = 10;
 const fontArabic = path.join(
    __dirname,
    "..",
@@ -89,7 +91,6 @@ function normalizeProductions(raw, mainProd) {
 // CREATE APIARY
 router.post("/", authenticateUser, async (req, res) => {
    const userId = req.user.id;
-
    const {
       apiary_name,
       location,
@@ -100,6 +101,7 @@ router.post("/", authenticateUser, async (req, res) => {
       main_production,
       productions,
       is_favorite,
+      flight_range_km,
    } = req.body;
 
    try {
@@ -126,22 +128,46 @@ router.post("/", authenticateUser, async (req, res) => {
 
       // 2) main production
       const safeMain = (main_production || "honey").toLowerCase();
+      const parsedFlightRange =
+         flight_range_km === undefined || flight_range_km === null || flight_range_km === ""
+            ? DEFAULT_FLIGHT_RANGE_KM
+            : Number(flight_range_km);
 
+      if (
+         Number.isNaN(parsedFlightRange) ||
+         parsedFlightRange < MIN_FLIGHT_RANGE_KM ||
+         parsedFlightRange > MAX_FLIGHT_RANGE_KM
+      ) {
+         return res.status(400).json({
+            error: `flight_range_km must be a valid number between ${MIN_FLIGHT_RANGE_KM} and ${MAX_FLIGHT_RANGE_KM}`,
+         });
+      }
       // 3) insert apiary
       const insertResult = await pool.query(
          `INSERT INTO apiaries (
+      apiary_name,
+      location,
+      commune,
+      department,
+      land_owner_name,
+      phone,
+      owner_user_id,
+      main_production,
+      flight_range_km
+   )
+   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+   RETURNING *`,
+         [
             apiary_name,
             location,
             commune,
             department,
             land_owner_name,
             phone,
-            owner_user_id,
-            main_production
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING *`,
-         [apiary_name, location, commune, department, land_owner_name, phone, userId, safeMain],
+            userId,
+            safeMain,
+            parsedFlightRange,
+         ],
       );
 
       const apiary = insertResult.rows[0];
@@ -546,6 +572,103 @@ router.get("/summary", authenticateUser, async (req, res) => {
    }
 });
 
+router.get("/flight-range-map", authenticateUser, async (req, res) => {
+   const userId = req.user.id;
+
+   try {
+      const result = await pool.query(
+         `
+         SELECT
+            apiary_id,
+            apiary_name,
+            location,
+            commune,
+            department,
+            flight_range_km
+         FROM apiaries
+         WHERE owner_user_id = $1
+           AND location IS NOT NULL
+           AND TRIM(location) <> ''
+         ORDER BY apiary_name ASC
+         `,
+         [userId],
+      );
+
+      const apiaries = result.rows
+         .map((row) => {
+            const [latRaw, lngRaw] = String(row.location || "")
+               .split(",")
+               .map((x) => String(x).trim());
+
+            const latitude = parseFloat(latRaw);
+            const longitude = parseFloat(lngRaw);
+
+            if (Number.isNaN(latitude) || Number.isNaN(longitude)) return null;
+
+            return {
+               apiary_id: row.apiary_id,
+               apiary_name: row.apiary_name,
+               commune: row.commune,
+               department: row.department,
+               location: row.location,
+               latitude,
+               longitude,
+               flight_range_km: Number(row.flight_range_km ?? DEFAULT_FLIGHT_RANGE_KM),
+            };
+         })
+         .filter(Boolean);
+
+      return res.json({ success: true, apiaries });
+   } catch (error) {
+      console.error("Error fetching flight range map apiaries:", error);
+      return res
+         .status(500)
+         .json({ error: "Server error while fetching flight range map apiaries" });
+   }
+});
+
+router.patch("/:id/flight-range", authenticateUser, async (req, res) => {
+   const { id } = req.params;
+   const userId = req.user.id;
+   const { flight_range_km } = req.body;
+
+   const parsedFlightRange = Number(flight_range_km);
+
+   if (
+      Number.isNaN(parsedFlightRange) ||
+      parsedFlightRange < MIN_FLIGHT_RANGE_KM ||
+      parsedFlightRange > MAX_FLIGHT_RANGE_KM
+   ) {
+      return res.status(400).json({
+         error: `flight_range_km must be a valid number between ${MIN_FLIGHT_RANGE_KM} and ${MAX_FLIGHT_RANGE_KM}`,
+      });
+   }
+
+   try {
+      const result = await pool.query(
+         `UPDATE apiaries
+          SET flight_range_km = $1
+          WHERE apiary_id = $2
+            AND owner_user_id = $3
+          RETURNING apiary_id, apiary_name, flight_range_km`,
+         [parsedFlightRange, id, userId],
+      );
+
+      if (result.rows.length === 0) {
+         return res.status(404).json({ error: "Apiary not found" });
+      }
+
+      return res.json({
+         success: true,
+         message: "Flight range updated successfully",
+         apiary: result.rows[0],
+      });
+   } catch (error) {
+      console.error("Error updating apiary flight range:", error);
+      return res.status(500).json({ error: "Server error while updating apiary flight range" });
+   }
+});
+
 // GET ONE APIARY (with productions[])
 router.get("/:id", authenticateUser, async (req, res) => {
    const { id } = req.params;
@@ -595,14 +718,30 @@ router.put("/:id", authenticateUser, async (req, res) => {
       land_owner_name,
       phone,
       main_production,
-      productions, // optional multi-edit
+      productions,
+      flight_range_km,
+      is_favorite,
    } = req.body;
 
    try {
       const safeMain = (main_production || "honey").toLowerCase();
 
       const safeFavorite = typeof is_favorite === "boolean" ? is_favorite : null;
+      const parsedFlightRange =
+         flight_range_km === undefined || flight_range_km === null || flight_range_km === ""
+            ? null
+            : Number(flight_range_km);
 
+      if (
+         parsedFlightRange !== null &&
+         (Number.isNaN(parsedFlightRange) ||
+            parsedFlightRange < MIN_FLIGHT_RANGE_KM ||
+            parsedFlightRange > MAX_FLIGHT_RANGE_KM)
+      ) {
+         return res.status(400).json({
+            error: `flight_range_km must be a valid number between ${MIN_FLIGHT_RANGE_KM} and ${MAX_FLIGHT_RANGE_KM}`,
+         });
+      }
       const result = await pool.query(
          `UPDATE apiaries
     SET apiary_name = $1,
@@ -612,9 +751,10 @@ router.put("/:id", authenticateUser, async (req, res) => {
         land_owner_name = $5,
         phone = $6,
         main_production = $7,
-        is_favorite = COALESCE($8, is_favorite)
-    WHERE apiary_id = $9
-    AND owner_user_id = $10
+        is_favorite = COALESCE($8, is_favorite),
+        flight_range_km = COALESCE($9, flight_range_km)
+    WHERE apiary_id = $10
+    AND owner_user_id = $11
     RETURNING *`,
          [
             apiary_name,
@@ -625,6 +765,7 @@ router.put("/:id", authenticateUser, async (req, res) => {
             phone,
             safeMain,
             safeFavorite,
+            parsedFlightRange,
             id,
             userId,
          ],
